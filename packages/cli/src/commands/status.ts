@@ -65,7 +65,7 @@ export function createStatusCommand(): Command {
 
         const [serverUp, chromaUp] = await Promise.all([
           probeHttp(`http://localhost:${port}/health`),
-          probeHttp(`http://localhost:${chromaPort}/`),
+          probeHttp(`http://localhost:${chromaPort}/api/v2/heartbeat`),
         ]);
 
         const chromaContainer = probeDockerContainer('kyberbot-chromadb');
