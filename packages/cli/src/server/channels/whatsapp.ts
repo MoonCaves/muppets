@@ -79,6 +79,10 @@ export class WhatsAppChannel implements Channel {
             const reply = await client.complete(text, {
               system: `You are ${agentName}, a personal AI agent. Respond helpfully and concisely. The user is messaging via WhatsApp.`,
             });
+            if (!reply || reply.trim().length === 0) {
+              logger.warn('Claude returned empty response, skipping reply');
+              return;
+            }
             await this.send(msg.key.remoteJid!, reply);
           } catch (error) {
             logger.error('Failed to process WhatsApp message', { error: String(error) });

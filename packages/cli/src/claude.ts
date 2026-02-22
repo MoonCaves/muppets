@@ -132,21 +132,28 @@ export class ClaudeClient {
       },
     });
 
-    // Collect all messages, extract text from the last assistant message
+    // Collect all assistant text blocks as fallback
     let lastAssistantText = '';
     for await (const message of response) {
       if (message.type === 'assistant') {
         const content = (message as any).message?.content;
         if (Array.isArray(content)) {
-          lastAssistantText = content
+          const text = content
             .filter((b: any) => b.type === 'text')
             .map((b: any) => b.text)
             .join('');
+          if (text) lastAssistantText = text;
         }
-      } else if (message.type === 'result' && (message as any).subtype === 'success') {
-        // Result message may contain the final text
-        const result = (message as any).result;
-        if (result) return result;
+      } else if (message.type === 'result') {
+        const resultMsg = message as any;
+        if (resultMsg.subtype === 'success') {
+          // result field is the authoritative final text
+          if (resultMsg.result) return resultMsg.result;
+          // Agent may have done tool-only work (e.g. file edits) with no text reply
+          logger.debug('Agent SDK returned success with empty result');
+        } else {
+          logger.warn(`Agent SDK error: ${resultMsg.subtype}`);
+        }
       }
     }
 

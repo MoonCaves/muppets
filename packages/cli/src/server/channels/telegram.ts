@@ -122,6 +122,10 @@ export class TelegramChannel implements Channel {
           const client = getClaudeClient();
           const systemPrompt = this.buildSystemPrompt();
           const reply = await client.complete(text, { system: systemPrompt });
+          if (!reply || reply.trim().length === 0) {
+            logger.warn('Claude returned empty response, skipping reply');
+            return;
+          }
           // Telegram has a 4096 char limit per message
           if (reply.length > 4096) {
             const chunks = this.chunkMessage(reply, 4096);
