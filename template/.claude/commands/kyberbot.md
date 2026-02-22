@@ -153,6 +153,34 @@ cd $KYBERBOT_ROOT && kyberbot sleep merges
 
 ---
 
+### Heartbeat
+
+#### `/kyberbot heartbeat list`
+Show all tasks defined in HEARTBEAT.md with their cadence and time window.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot heartbeat list
+```
+
+#### `/kyberbot heartbeat status`
+Show heartbeat configuration (interval, active hours) and execution state (last run times for each task).
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot heartbeat status
+```
+
+#### `/kyberbot heartbeat run`
+Trigger an immediate heartbeat tick — finds the most overdue task and executes it.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot heartbeat run
+```
+
+---
+
 ### Skills
 
 #### `/kyberbot skill list`

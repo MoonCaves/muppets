@@ -14,6 +14,7 @@
  *   kyberbot recall        # Entity graph queries
  *   kyberbot timeline      # Temporal event queries
  *   kyberbot sleep         # Sleep agent management
+ *   kyberbot heartbeat     # Heartbeat tasks (list, status, run)
  *   kyberbot skill         # Skill lifecycle (list, create, remove, setup)
  *   kyberbot channel       # Messaging channels (list, add, remove, status)
  *   kyberbot status        # Service health dashboard
@@ -39,6 +40,7 @@ import { createSearchCommand } from './commands/search.js';
 import { createRecallCommand } from './commands/recall.js';
 import { createTimelineCommand } from './commands/timeline.js';
 import { createSleepCommand } from './commands/sleep.js';
+import { createHeartbeatCommand } from './commands/heartbeat.js';
 import { createSkillCommand } from './commands/skill.js';
 import { createChannelCommand } from './commands/channel.js';
 import { createStatusCommand } from './commands/status.js';
@@ -82,6 +84,7 @@ program.addCommand(createSearchCommand());
 program.addCommand(createRecallCommand());
 program.addCommand(createTimelineCommand());
 program.addCommand(createSleepCommand());
+program.addCommand(createHeartbeatCommand());
 
 // Extensions
 program.addCommand(createSkillCommand());
