@@ -27,7 +27,7 @@ You need three things before you start:
 
 ### Step 1: Install KyberBot
 
-This downloads the KyberBot tool and makes the `kyberbot` command available on your machine.
+This installs the `kyberbot` command on your machine. You only do this once.
 
 ```bash
 git clone https://github.com/KybernesisAI/kyberbot.git
@@ -37,11 +37,11 @@ npm run build
 cd packages/cli && npm link && cd ../..
 ```
 
-You only do this once.
+Think of this like installing an app. The `kyberbot/` folder is the app itself -- you don't work inside it.
 
 ### Step 2: Create Your Agent
 
-Pick a folder where your agent will live. This is separate from the KyberBot source code -- it's your agent's home, where its personality, memory, and skills are stored.
+Create a new folder anywhere on your machine and run `kyberbot onboard` inside it:
 
 ```bash
 mkdir ~/my-agent
@@ -49,7 +49,9 @@ cd ~/my-agent
 kyberbot onboard
 ```
 
-The onboard wizard asks you a few questions (agent name, your name, personality style) and then sets up everything automatically -- identity files, memory databases, Claude Code configuration, and more. Takes about 2 minutes.
+The onboard wizard asks you a few questions (agent name, your name, personality style) and sets up everything in this folder -- personality files, memory databases, Claude Code configuration, and more.
+
+**This folder is your agent.** Everything it knows, everything it learns, its entire personality and memory -- all lives here. You can create multiple agents in different folders if you want, each with its own name and personality, all powered by the same KyberBot install.
 
 ### Step 3: Start Your Agent
 
@@ -59,18 +61,18 @@ From your agent's folder, run:
 kyberbot
 ```
 
-This starts all background services (memory database, heartbeat scheduler, messaging channels). Leave this running.
+This starts all background services (memory database, heartbeat scheduler, messaging channels). Leave this terminal running.
 
 ### Step 4: Talk to Your Agent
 
-Open a **new terminal**, go to your agent's folder, and start Claude Code:
+Open a **second terminal**, go to your agent's folder, and start Claude Code:
 
 ```bash
 cd ~/my-agent
 claude
 ```
 
-That's it. Claude Code loads your agent's personality and memory automatically. Just start talking.
+Claude Code automatically loads your agent's personality and memory. Just start talking.
 
 See [Getting Started](docs/getting-started.md) for the full walkthrough.
 

@@ -33,7 +33,7 @@ claude --version  # Should show Claude Code version
 
 ### 1. Install KyberBot
 
-This downloads the tool and makes the `kyberbot` command available on your machine. You only do this once.
+This installs the `kyberbot` command on your machine. You only do this once.
 
 ```bash
 git clone https://github.com/KybernesisAI/kyberbot.git
@@ -43,19 +43,21 @@ npm run build
 cd packages/cli && npm link && cd ../..
 ```
 
+Think of this like installing an app. The `kyberbot/` folder is the app itself -- you don't work inside it.
+
 After this, the `kyberbot` command works from anywhere on your system.
 
 ### 2. Create Your Agent
 
-Your agent lives in its own folder -- separate from the KyberBot source code. This folder is your agent's home, where its personality, memory, and skills are stored.
-
-Pick a location and create it:
+Create a new folder anywhere on your machine and run `kyberbot onboard` inside it:
 
 ```bash
 mkdir ~/my-agent
 cd ~/my-agent
 kyberbot onboard
 ```
+
+**This folder is your agent.** Everything it knows, everything it learns, its entire personality and memory -- all lives here. You can create multiple agents in different folders if you want, each with its own name and personality, all powered by the same KyberBot install.
 
 The onboard wizard asks you a few questions and sets up everything:
 
