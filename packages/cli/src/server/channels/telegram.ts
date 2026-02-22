@@ -74,10 +74,8 @@ export class TelegramChannel implements Channel {
             logger.info(`Owner verified: chat_id=${chatId}`);
 
             const agentName = getAgentName();
-            await ctx.reply(
-              `Connected! You are now the verified owner.\n\n` +
-              `I'm ${agentName}, your personal AI agent. Send me a message anytime.`
-            );
+            const greeting = this.loadGreeting(agentName);
+            await ctx.reply(`Connected! You are now the verified owner.\n\n${greeting}`);
             return;
           }
           // Wrong code — silently ignore
@@ -226,17 +224,22 @@ export class TelegramChannel implements Channel {
   }
 
   private loadGreeting(agentName: string): string {
-    // Try to extract a greeting style from SOUL.md
     try {
       const root = getRoot();
-      const soulPath = join(root, 'SOUL.md');
-      if (existsSync(soulPath)) {
-        return `Hey! I'm ${agentName}. Send me a message and I'll help however I can.`;
+      const userPath = join(root, 'USER.md');
+      const userMd = existsSync(userPath) ? readFileSync(userPath, 'utf-8') : '';
+      const isFirstRun = userMd.includes('<!-- I will fill this in') || userMd.length < 300;
+
+      if (isFirstRun) {
+        return `Hey! I'm ${agentName}, and I just came online for the first time.\n\n` +
+          `I'd love to get to know you — tell me about yourself, what you're working on, ` +
+          `what matters to you. Everything you share helps me be a better partner.\n\n` +
+          `You can also tell me how you'd like me to communicate and I'll adapt.`;
       }
     } catch {
       // Non-fatal
     }
-    return `I'm ${agentName}, your personal AI agent. Send me a message anytime.`;
+    return `Hey! I'm ${agentName}. Send me a message and I'll help however I can.`;
   }
 
   private chunkMessage(text: string, maxLen: number): string[] {

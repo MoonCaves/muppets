@@ -99,11 +99,14 @@ export function getServerPort(): number {
 }
 
 /**
- * Get Claude mode (subscription or sdk)
+ * Get Claude mode.
+ * Config values: 'subscription' | 'sdk'
+ * Internal modes: 'agent-sdk' (subscription users), 'sdk' (API key users)
  */
-export function getClaudeMode(): 'subscription' | 'sdk' {
+export function getClaudeMode(): 'agent-sdk' | 'sdk' {
   if (process.env.ANTHROPIC_API_KEY) return 'sdk';
-  return getIdentity().claude?.mode || 'subscription';
+  const configMode = getIdentity().claude?.mode || 'subscription';
+  return configMode === 'subscription' ? 'agent-sdk' : 'sdk';
 }
 
 /**

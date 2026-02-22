@@ -1,15 +1,16 @@
 /**
  * KyberBot — Claude Abstraction Layer
  *
- * Two modes:
- *   1. SDK — Direct Anthropic API calls (requires ANTHROPIC_API_KEY)
- *   2. Subprocess — Spawns `claude -p` (requires Claude Code subscription)
+ * Three modes:
+ *   1. Agent SDK — Uses @anthropic-ai/claude-code (subscription users, recommended)
+ *   2. SDK — Direct Anthropic API calls (requires ANTHROPIC_API_KEY)
+ *   3. Subprocess — Spawns `claude -p` (fallback if Agent SDK fails to load)
  *
  * All brain AI operations go through this layer.
  */
 
 import { spawn } from 'child_process';
-import { getClaudeMode, getClaudeModel } from './config.js';
+import { getClaudeMode, getClaudeModel, getRoot } from './config.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('claude');
@@ -33,14 +34,31 @@ const MODEL_IDS: Record<string, string> = {
 };
 
 export class ClaudeClient {
-  private mode: 'sdk' | 'subprocess';
+  private mode: 'agent-sdk' | 'sdk' | 'subprocess';
   private sdk: any | null = null;
 
   constructor() {
     const configMode = getClaudeMode();
-    this.mode = configMode === 'subscription' ? 'subprocess' : configMode;
-    if (this.mode === 'sdk') {
+
+    if (configMode === 'agent-sdk') {
+      this.mode = 'agent-sdk';
+      // Verify Agent SDK is loadable; fall back to subprocess if not
+      this.verifyAgentSDK();
+    } else if (configMode === 'sdk') {
+      this.mode = 'sdk';
       this.initSDK();
+    } else {
+      this.mode = 'subprocess';
+    }
+  }
+
+  private async verifyAgentSDK(): Promise<void> {
+    try {
+      await import('@anthropic-ai/claude-code');
+      logger.debug('Agent SDK available');
+    } catch {
+      logger.warn('Agent SDK (@anthropic-ai/claude-code) not available, falling back to subprocess mode');
+      this.mode = 'subprocess';
     }
   }
 
@@ -61,6 +79,9 @@ export class ClaudeClient {
   async complete(prompt: string, opts: CompleteOptions = {}): Promise<string> {
     const model = opts.model || getClaudeModel();
 
+    if (this.mode === 'agent-sdk') {
+      return this.completeAgentSDK(prompt, opts);
+    }
     if (this.mode === 'sdk' && this.sdk) {
       return this.completeSDK(prompt, model, opts);
     }
@@ -73,6 +94,13 @@ export class ClaudeClient {
   async chat(messages: Message[], system: string): Promise<string> {
     const model = getClaudeModel();
 
+    if (this.mode === 'agent-sdk') {
+      // Flatten messages into a prompt with history for Agent SDK
+      const historyPrompt = messages
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+        .join('\n\n');
+      return this.completeAgentSDK(historyPrompt, { system });
+    }
     if (this.mode === 'sdk' && this.sdk) {
       return this.chatSDK(messages, system, model);
     }
@@ -82,6 +110,47 @@ export class ClaudeClient {
       .join('\n\n');
     const fullPrompt = `${system}\n\n${historyPrompt}`;
     return this.completeSubprocess(fullPrompt, {});
+  }
+
+  private async completeAgentSDK(prompt: string, opts: CompleteOptions): Promise<string> {
+    const { query } = await import('@anthropic-ai/claude-code');
+    let root: string;
+    try {
+      root = getRoot();
+    } catch {
+      root = process.cwd();
+    }
+
+    const response = query({
+      prompt,
+      options: {
+        cwd: root,
+        maxTurns: 3,
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.system ? { customSystemPrompt: opts.system } : {}),
+        permissionMode: 'bypassPermissions',
+      },
+    });
+
+    // Collect all messages, extract text from the last assistant message
+    let lastAssistantText = '';
+    for await (const message of response) {
+      if (message.type === 'assistant') {
+        const content = (message as any).message?.content;
+        if (Array.isArray(content)) {
+          lastAssistantText = content
+            .filter((b: any) => b.type === 'text')
+            .map((b: any) => b.text)
+            .join('');
+        }
+      } else if (message.type === 'result' && (message as any).subtype === 'success') {
+        // Result message may contain the final text
+        const result = (message as any).result;
+        if (result) return result;
+      }
+    }
+
+    return lastAssistantText;
   }
 
   private async completeSDK(
