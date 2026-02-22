@@ -4,36 +4,48 @@ This document describes KyberBot's system architecture, component relationships,
 
 ---
 
-## Two-Mode Architecture
+## Three-Mode Architecture
 
-KyberBot operates in two modes depending on how it interacts with Claude Code:
+KyberBot operates in three modes depending on how it interacts with Claude:
 
-### Subscription Mode (Primary)
+### Agent SDK Mode (Recommended)
 
-In subscription mode, KyberBot uses the Claude Code CLI (`claude`) as its runtime. This is the default and recommended mode.
+Uses `@anthropic-ai/claude-code` programmatically. This is the default and recommended mode for Claude Code subscription users.
 
 - No API keys to manage
 - No per-token costs beyond the Claude Code subscription
-- Full access to Claude Code features: sub-agents, MCP servers, skills, file editing, git
-- The agent runs as a Claude Code session with KyberBot's CLAUDE.md loaded
+- Full access to Claude Code features: tool_use, MCP servers, file access, sub-agents, skills, git
+- The heartbeat scheduler and channels use this mode for background operations
 
 ```
-User ─▶ claude CLI ─▶ CLAUDE.md context ─▶ KyberBot agent
+Heartbeat/Channel ─▶ @anthropic-ai/claude-code query() ─▶ KyberBot agent
 ```
 
-### SDK Mode (Advanced)
+### SDK Mode
 
-For programmatic integration, KyberBot can interface with Claude via the Anthropic SDK. This mode is used by:
+Direct Anthropic API calls via `@anthropic-ai/sdk`. For users who prefer direct API access or need programmatic control.
 
-- The heartbeat scheduler (spawns headless Claude Code sessions)
-- Messaging channels (forward messages to Claude Code)
-- External integrations that call the agent via API
+- Requires `ANTHROPIC_API_KEY` in `.env`
+- Standard API token costs apply
+- No Claude Code features (MCP, sub-agents, skills) -- just raw completions
 
 ```
-Heartbeat/Channel ─▶ claude --print --prompt "..." ─▶ KyberBot agent
+Brain AI ops ─▶ @anthropic-ai/sdk ─▶ Anthropic API ─▶ response
 ```
 
-Both modes use the same brain, skills, and living documents.
+### Subprocess Mode (Fallback)
+
+Spawns `claude -p` as a child process. Used as a fallback if the Agent SDK fails to load.
+
+- Same capabilities as Agent SDK mode (Claude Code features available)
+- Higher overhead per invocation (process spawn)
+- Automatic fallback -- no configuration needed
+
+```
+Heartbeat/Channel ─▶ spawn claude -p "..." ─▶ KyberBot agent
+```
+
+All three modes use the same brain, skills, and living documents. The mode is determined at startup based on configuration in `identity.yaml` and available dependencies.
 
 ---
 
@@ -59,8 +71,10 @@ Both modes use the same brain, skills, and living documents.
 │                         │                                        │
 │  ┌──────────┐    ┌─────▼──────┐                                │
 │  │Heartbeat │    │  Claude    │                                │
-│  │Scheduler │───▶│  Code      │                                │
-│  └──────────┘    │  Runtime   │                                │
+│  │Scheduler │───▶│  Runtime   │                                │
+│  └──────────┘    │ (Agent SDK │                                │
+│                  │  / SDK /   │                                │
+│                  │ Subprocess)│                                │
 │                  └─────┬──────┘                                  │
 │                        │                                         │
 ├────────────────────────┼────────────────────────────────────────┤
@@ -94,10 +108,12 @@ Both modes use the same brain, skills, and living documents.
 │  └────────────────────────────────────────────┘                 │
 │                                                                  │
 ├──────────────────────────────────────────────────────────────────┤
-│                  Optional: Kybernesis Cloud                      │
+│              Optional: Kybernesis Cloud Brain                    │
 │                                                                  │
 │  ┌────────────────────────────────────────────┐                 │
-│  │  Cloud backup, cross-device sync, web UI   │                 │
+│  │  Cloud workspace memory (query endpoint)    │                 │
+│  │  API key only — no sync, no push/pull       │                 │
+│  │  Complements local brain with cloud recall  │                 │
 │  └────────────────────────────────────────────┘                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -182,8 +198,8 @@ Heartbeat scheduler checks HEARTBEAT.md
 Task is due (based on cadence + heartbeat-state.json)
        │
        ▼
-Spawn Claude Code session:
-  claude --print --prompt "[task instructions]"
+Invoke Claude via Agent SDK (default):
+  query({ prompt: "[task instructions]", ... })
        │
        ▼
 Agent executes task with full context
@@ -207,7 +223,7 @@ Server authenticates sender
 Message queued for processing
        │
        ▼
-Spawn Claude Code session with message as input
+Invoke Claude via Agent SDK with message as input
        │
        ▼
 Agent processes with full context
@@ -326,6 +342,15 @@ KyberBot deliberately builds on Claude Code rather than building a custom agent 
 - **Permission system**: Granular control over what the agent can do
 - **Tool use**: Bash, read, write, search -- all built in
 
+### Why Agent SDK as Default
+
+The Agent SDK (`@anthropic-ai/claude-code`) is the recommended mode because it:
+
+- Works with an existing Claude Code subscription at no extra cost
+- Provides full tool_use, MCP, and file access in programmatic contexts
+- Avoids the overhead of spawning a subprocess for each invocation
+- Falls back to subprocess mode automatically if the SDK is not available
+
 ### Why Markdown for Everything
 
 Living documents, skills, and knowledge files are all markdown. This makes them:
@@ -344,7 +369,7 @@ Living documents, skills, and knowledge files are all markdown. This makes them:
 
 ### Why Local-First
 
-All data lives on your machine by default. Kybernesis cloud sync is optional. This ensures:
+All data lives on your machine by default. Kybernesis cloud brain is optional and query-based -- it complements local memory but never replaces it. This ensures:
 
 - Privacy by default
 - No dependency on external services

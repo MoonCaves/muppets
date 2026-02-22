@@ -138,6 +138,15 @@ When your agent encounters a task it cannot handle, it creates a new skill:
 - Skills accumulate over time, making the agent permanently more capable
 - Full lifecycle management: list, create, remove, setup
 
+### Cloud Brain (Optional)
+
+Connect to [Kybernesis](https://kybernesis.ai) for cloud-backed workspace memory:
+
+- Query workspace memories from any device
+- Complements local brain -- cloud results fill gaps in local memory
+- API key only, no extra configuration
+- Disconnect anytime with `kyberbot kybernesis disconnect`
+
 ---
 
 ## How It Works
@@ -146,11 +155,13 @@ KyberBot is not a framework that wraps an LLM. It is a layer on top of Claude Co
 
 1. **Identity** -- SOUL.md, USER.md, and HEARTBEAT.md loaded as context
 2. **Memory** -- ChromaDB + SQLite databases the agent reads and writes via CLI tools
-3. **Scheduling** -- A heartbeat loop that spawns Claude Code sessions for recurring tasks
-4. **Channels** -- Telegram/WhatsApp bridges that pipe messages to and from Claude Code
+3. **Scheduling** -- A heartbeat loop that invokes Claude via the Agent SDK for recurring tasks
+4. **Channels** -- Telegram/WhatsApp bridges that pipe messages to and from Claude
 5. **Skills** -- Markdown skill files that teach the agent new capabilities
 
 Claude Code handles the hard parts: tool use, sub-agent orchestration, MCP servers, file editing, permissions, and reasoning. KyberBot just gives it a brain and a body.
+
+Background operations (heartbeats, channel messages) use the Agent SDK (`@anthropic-ai/claude-code`) by default, which works with your Claude Code subscription at no extra cost. An Anthropic API key can be used instead for direct SDK access.
 
 ---
 
@@ -164,26 +175,32 @@ Claude Code handles the hard parts: tool use, sub-agent orchestration, MCP serve
 │  └─────────┘  └──────────┘  └────────┘  └───────────┘  │
 ├─────────────────────────────────────────────────────────┤
 │                     KyberBot CLI                         │
-│  ┌───────────┐  ┌───────────┐                          │
-│  │ Heartbeat │  │ Channels  │                          │
-│  │ Scheduler │  │ Telegram  │                          │
-│  │           │  │ WhatsApp  │                          │
-│  └─────┬─────┘  └─────┬─────┘                          │
-├────────┼───────────────┼────────────────────────────────┤
-│        │          Brain │                                │
-│  ┌─────▼───────────────▼──────────────────────────┐     │
-│  │  ChromaDB        SQLite          brain/        │     │
-│  │  (vectors)    (entities,      (markdown        │     │
-│  │               timeline,       knowledge)       │     │
-│  │               sleep state)                     │     │
-│  └────────────────────────────────────────────────┘     │
+│  ┌───────────┐  ┌───────────┐  ┌─────────────────────┐  │
+│  │ Heartbeat │  │ Channels  │  │ Claude Runtime      │  │
+│  │ Scheduler │  │ Telegram  │  │ (Agent SDK / SDK /  │  │
+│  │           │  │ WhatsApp  │  │  Subprocess)        │  │
+│  └─────┬─────┘  └─────┬─────┘  └──────────┬──────────┘  │
+├────────┼───────────────┼───────────────────┼─────────────┤
+│        │          Brain │                  │              │
+│  ┌─────▼───────────────▼──────────────────▼─────────┐   │
+│  │  ChromaDB        SQLite          brain/           │   │
+│  │  (vectors)    (entities,      (markdown           │   │
+│  │               timeline,       knowledge)          │   │
+│  │               sleep state)                        │   │
+│  └───────────────────────────────────────────────────┘   │
 │                                                          │
 │  ┌────────────────────────────────────────────────┐     │
 │  │              Sleep Agent                        │     │
 │  │  decay → tag → link → tier → summarize →       │     │
 │  │  entity hygiene                                 │     │
 │  └────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────┘
+├──────────────────────────────────────────────────────────┤
+│           Optional: Kybernesis Cloud Brain                │
+│  ┌────────────────────────────────────────────────┐     │
+│  │  Cloud workspace memory (query endpoint)        │     │
+│  │  API key only — complements local brain         │     │
+│  └────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -215,7 +232,7 @@ Claude Code handles the hard parts: tool use, sub-agent orchestration, MCP serve
 - [Skills](docs/skills.md) -- Skill system and auto-generation
 - [Channels](docs/channels.md) -- Telegram and WhatsApp messaging setup
 - [Architecture](docs/architecture.md) -- System overview, data flow, file structure
-- [Kybernesis Cloud](docs/kybernesis.md) -- Optional cloud sync
+- [Kybernesis Cloud](docs/kybernesis.md) -- Optional cloud brain
 - [Why KyberBot?](docs/why-kyberbot.md) -- Positioning and philosophy
 
 ---

@@ -73,78 +73,110 @@ The onboard wizard asks you a few questions and sets up everything:
 
 The onboard wizard walks you through 7 steps:
 
-#### Step 1: Agent Name
+#### Step 1: Agent Identity
 
-Choose a name for your agent. This is how it will refer to itself in conversation.
+Choose a name and description for your agent, and decide how to set up its personality (SOUL.md). You can use a guided template, write from scratch later, or skip and let the agent develop its personality over time.
 
 ```
-What would you like to name your agent?
+What should your AI agent be called?
 > Atlas
+
+One-line description of your agent:
+> My personal AI agent
+
+How would you like to define its personality? (SOUL.md)
+> Guided template (recommended)
 ```
 
-#### Step 2: Personality
+#### Step 2: About You
 
-Describe how your agent should communicate. Formal? Casual? Warm? Terse? The wizard writes this to `SOUL.md`.
-
-```
-Describe your agent's personality:
-> Direct and concise. Warm but not chatty. Proactive about
-> suggesting next steps. Prefers bullet points over paragraphs.
-```
-
-#### Step 3: About You
-
-Tell your agent about yourself. Name, work, interests, goals. This populates `USER.md`.
+Tell your agent about yourself. Name, timezone, location, and anything else you want it to know. This populates `USER.md`.
 
 ```
-Tell your agent about yourself:
+Your name:
+> Alex
+
+Timezone (detected: America/New_York):
+> America/New_York
+
+Location (optional):
+> New York
+
+Tell your agent something about yourself (optional):
 > I'm a software engineer working on fintech products.
-> I track my health with an Oura ring and run 3x/week.
-> I'm trying to launch a SaaS product by Q3.
 ```
 
-#### Step 4: Heartbeat Tasks
+#### Step 3: Claude Code
 
-Configure recurring tasks. The wizard provides sensible defaults that you can customize.
-
-```
-Default heartbeat tasks:
-  [x] Morning briefing (daily, 8:00 AM)
-  [x] Evening review (daily, 9:00 PM)
-  [ ] Weekly planning (Monday, 9:00 AM)
-  [ ] Health check-in (daily, 7:00 AM)
-
-Customize? (y/n)
-```
-
-#### Step 5: Messaging Channels (Optional)
-
-Connect Telegram and/or WhatsApp. You can skip this and set it up later.
+Choose how KyberBot connects to Claude for background operations (heartbeats, channels). Agent SDK is recommended for subscription users -- it works with your existing Claude Code subscription at no extra cost. Alternatively, provide an Anthropic API key for direct SDK access.
 
 ```
-Set up Telegram? (y/n)
-Set up WhatsApp? (y/n)
+How would you like to connect to Claude?
+> Agent SDK (recommended) -- works with your Claude Code subscription
 ```
 
-#### Step 6: Kybernesis Cloud (Optional)
+#### Step 4: Initializing Brain
 
-Optionally connect to Kybernesis for cloud backup and cross-device sync.
-
-```
-Connect to Kybernesis cloud? (y/n)
-```
-
-After completing onboarding, you will see:
+The wizard creates directories (`data/`, `logs/`, `brain/`, `skills/`), copies template files into `.claude/`, writes `identity.yaml`, `SOUL.md`, `USER.md`, `HEARTBEAT.md`, and sets up the Docker Compose file for ChromaDB.
 
 ```
- ✓ Agent "Atlas" created successfully.
- ✓ SOUL.md written
- ✓ USER.md written
- ✓ HEARTBEAT.md written
- ✓ identity.yaml configured
-
- Run 'kyberbot' to start services, then 'claude' to chat.
+  + data/
+  + logs/
+  + brain/
+  + skills/
+  + .claude/ (CLAUDE.md, settings, commands, skills)
+  + identity.yaml
+  + SOUL.md
+  + USER.md
+  + HEARTBEAT.md
+  + docker-compose.yml
 ```
+
+#### Step 5: Cloud Sync / Kybernesis (Optional)
+
+Optionally connect to Kybernesis for cloud-backed workspace memory. This only requires an API key -- no other configuration. Your local and cloud brains are independent stores that complement each other.
+
+```
+Enable cloud memory sync via Kybernesis? (optional)
+> No
+```
+
+If you choose yes, you will be prompted for your Kybernesis API key. You can also add it later by putting `KYBERNESIS_API_KEY=...` in `.env`.
+
+#### Step 6: Messaging Channels (Optional)
+
+Connect Telegram and/or WhatsApp so you can message your agent from your phone. You can skip this and set it up later.
+
+```
+Connect messaging channels? (Telegram / WhatsApp)
+> No
+```
+
+#### Step 7: Summary
+
+The wizard shows what was created and how to start using your agent.
+
+```
+ + identity.yaml    -- Agent configuration
+ + SOUL.md          -- Agent personality
+ + USER.md          -- What the agent knows about you
+ + HEARTBEAT.md     -- Recurring task schedule
+ + .claude/CLAUDE.md -- Claude Code instructions
+
+ Atlas is alive.
+
+ To start all services:
+   kyberbot
+
+ To start talking:
+   cd ~/my-agent && claude
+```
+
+---
+
+## First-Run Experience
+
+When you first open Claude Code in your agent folder (`cd ~/my-agent && claude`), the agent will warmly introduce itself and ask to learn about you. This is normal -- it is reading its SOUL.md and USER.md for the first time and wants to fill in the gaps. Share as much or as little as you like. Everything you tell it gets stored in its brain for future sessions.
 
 ---
 
@@ -268,6 +300,12 @@ kyberbot skill info my-skill        # Show skill details
 kyberbot update                     # Update CLI and refresh templates
 kyberbot update --check             # Preview available updates
 kyberbot update --templates         # Refresh templates only
+
+# Kybernesis cloud brain
+kyberbot kybernesis query "..."     # Search cloud workspace memory
+kyberbot kybernesis list            # Browse all memories
+kyberbot kybernesis status          # Check connection status
+kyberbot kybernesis disconnect      # Switch to local-only memory
 ```
 
 ---
