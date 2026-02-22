@@ -29,11 +29,17 @@ export function getRoot(): string {
   }
 
   // Walk up from cwd looking for identity.yaml
+  // Safety: skip directories that look like the kyberbot monorepo source
+  // (they contain packages/ alongside identity.yaml from the template)
   let dir = process.cwd();
   while (dir !== '/') {
     if (existsSync(join(dir, 'identity.yaml'))) {
-      _root = dir;
-      return _root;
+      // Guard: don't resolve to the monorepo source root
+      const isMonorepo = existsSync(join(dir, 'packages', 'cli', 'src'));
+      if (!isMonorepo) {
+        _root = dir;
+        return _root;
+      }
     }
     dir = resolve(dir, '..');
   }

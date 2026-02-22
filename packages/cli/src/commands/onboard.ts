@@ -245,7 +245,7 @@ export function createOnboardCommand(): Command {
       if (openaiKey) envLines.push(`OPENAI_API_KEY=${openaiKey}`);
       envLines.push('');
       envLines.push('# ChromaDB URL (default)');
-      envLines.push('CHROMA_URL=http://localhost:8000');
+      envLines.push('CHROMA_URL=http://localhost:8001');
       envLines.push('');
       envLines.push('# Git sync interval in minutes');
       envLines.push('COMMIT_INTERVAL_MINUTES=5');

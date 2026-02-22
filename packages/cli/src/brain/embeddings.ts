@@ -99,7 +99,7 @@ export async function initializeEmbeddings(): Promise<boolean> {
 
   try {
     // Connect to ChromaDB server
-    const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8000';
+    const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8001';
     const url = new URL(chromaUrl);
     chromaClient = new ChromaClient({
       path: chromaUrl,

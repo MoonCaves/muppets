@@ -13,7 +13,19 @@ import { ServiceHandle } from '../types.js';
 const logger = createLogger('chromadb');
 
 const CONTAINER_NAME = 'kyberbot-chromadb';
-const CHROMA_PORT = 8000;
+const DEFAULT_CHROMA_PORT = 8001;
+
+function getChromaPort(): number {
+  const envUrl = process.env.CHROMA_URL;
+  if (envUrl) {
+    try {
+      return parseInt(new URL(envUrl).port) || DEFAULT_CHROMA_PORT;
+    } catch {
+      return DEFAULT_CHROMA_PORT;
+    }
+  }
+  return DEFAULT_CHROMA_PORT;
+}
 
 async function isDockerRunning(): Promise<boolean> {
   try {
@@ -101,12 +113,12 @@ async function waitForChromaDB(maxWaitMs: number = 30000): Promise<boolean> {
   while (Date.now() - startTime < maxWaitMs) {
     try {
       // Try v2 API first (newer ChromaDB versions)
-      let response = await fetch(`http://localhost:${CHROMA_PORT}/api/v2/heartbeat`);
+      let response = await fetch(`http://localhost:${getChromaPort()}/api/v2/heartbeat`);
       if (response.ok) {
         return true;
       }
       // Fall back to root endpoint
-      response = await fetch(`http://localhost:${CHROMA_PORT}/`);
+      response = await fetch(`http://localhost:${getChromaPort()}/`);
       if (response.ok) {
         return true;
       }
@@ -174,7 +186,7 @@ export async function startChromaDB(rootDir: string): Promise<ServiceHandle> {
         logger.info('Creating fresh ChromaDB container...');
         execSync(`docker run -d \
           --name ${CONTAINER_NAME} \
-          -p ${CHROMA_PORT}:8000 \
+          -p ${getChromaPort()}:8000 \
           -v "${dataDir}:/chroma/chroma" \
           -e IS_PERSISTENT=TRUE \
           -e ANONYMIZED_TELEMETRY=FALSE \
@@ -200,7 +212,7 @@ export async function startChromaDB(rootDir: string): Promise<ServiceHandle> {
 
       execSync(`docker run -d \
         --name ${CONTAINER_NAME} \
-        -p ${CHROMA_PORT}:8000 \
+        -p ${getChromaPort()}:8000 \
         -v "${dataDir}:/chroma/chroma" \
         -e IS_PERSISTENT=TRUE \
         -e ANONYMIZED_TELEMETRY=FALSE \
@@ -221,7 +233,7 @@ export async function startChromaDB(rootDir: string): Promise<ServiceHandle> {
       }
     }
 
-    logger.info(`ChromaDB ready on port ${CHROMA_PORT}`);
+    logger.info(`ChromaDB ready on port ${getChromaPort()}`);
 
     return {
       stop: async () => {
@@ -245,5 +257,5 @@ export async function startChromaDB(rootDir: string): Promise<ServiceHandle> {
 }
 
 export function getChromaDBUrl(): string {
-  return `http://localhost:${CHROMA_PORT}`;
+  return `http://localhost:${getChromaPort()}`;
 }
