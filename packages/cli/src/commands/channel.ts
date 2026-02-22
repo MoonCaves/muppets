@@ -33,11 +33,19 @@ function getChannelInfos(identity: IdentityConfig): ChannelInfo[] {
 
   if (identity.channels?.telegram) {
     const tg = identity.channels.telegram;
+    const hasToken = !!tg.bot_token && tg.bot_token !== 'YOUR_BOT_TOKEN_HERE';
+    const hasOwner = !!tg.owner_chat_id;
+    let details = 'No bot token';
+    if (hasToken && hasOwner) {
+      details = `Verified (owner: ${tg.owner_chat_id})`;
+    } else if (hasToken) {
+      details = 'Bot token set — pending verification';
+    }
     channels.push({
       type: 'telegram',
-      configured: !!tg.bot_token && tg.bot_token !== 'YOUR_BOT_TOKEN_HERE',
+      configured: hasToken,
       enabled: true,
-      details: tg.bot_token ? 'Bot token set' : 'No bot token',
+      details,
     });
   }
 
@@ -103,7 +111,8 @@ export function createChannelCommand(): Command {
     .command('add')
     .description('Add a messaging channel')
     .argument('<type>', 'Channel type: telegram or whatsapp')
-    .action((type: string) => {
+    .option('--reverify', 'Clear owner verification and generate a new code on next start')
+    .action((type: string, opts: { reverify?: boolean }) => {
       if (type !== 'telegram' && type !== 'whatsapp') {
         console.error(chalk.red(`\nUnknown channel type: ${type}`));
         console.log(chalk.dim('  Supported: telegram, whatsapp\n'));
@@ -123,9 +132,21 @@ export function createChannelCommand(): Command {
         const channels = identity.channels as Record<string, unknown>;
 
         if (type === 'telegram') {
+          if (opts.reverify && channels.telegram) {
+            // Clear owner to force re-verification on next start
+            const tg = channels.telegram as Record<string, unknown>;
+            delete tg.owner_chat_id;
+            writeFileSync(identityPath, yaml.dump(identity, { lineWidth: 120 }));
+
+            console.log(chalk.green('\nTelegram owner verification cleared.'));
+            console.log(chalk.dim('  A new verification code will be generated on next `kyberbot` start.\n'));
+            return;
+          }
+
           if (channels.telegram) {
             console.log(chalk.yellow('\nTelegram channel already configured.'));
-            console.log(chalk.dim('  Edit identity.yaml to modify the bot_token.\n'));
+            console.log(chalk.dim('  Edit identity.yaml to modify the bot_token.'));
+            console.log(chalk.dim('  Use --reverify to clear owner and re-verify.\n'));
             return;
           }
 
@@ -141,6 +162,7 @@ export function createChannelCommand(): Command {
           console.log(chalk.dim('  1. Get a bot token from @BotFather on Telegram'));
           console.log(chalk.dim('  2. Replace YOUR_BOT_TOKEN_HERE in identity.yaml'));
           console.log(chalk.dim('  3. Run `kyberbot` to connect'));
+          console.log(chalk.dim('  4. Send /start CODE to your bot to verify ownership'));
           console.log('');
         } else if (type === 'whatsapp') {
           if (channels.whatsapp) {
@@ -238,17 +260,23 @@ export function createChannelCommand(): Command {
         }
 
         for (const ch of channels) {
-          const type = ch.type.charAt(0).toUpperCase() + ch.type.slice(1);
+          const typeName = ch.type.charAt(0).toUpperCase() + ch.type.slice(1);
 
           if (!ch.configured) {
-            console.log(`  ${chalk.yellow('[needs setup]')} ${type}`);
+            console.log(`  ${chalk.yellow('[needs setup]')} ${typeName}`);
             if (ch.type === 'telegram') {
               console.log(chalk.dim('    Set bot_token in identity.yaml'));
             }
           } else if (!ch.enabled) {
-            console.log(`  ${chalk.gray('[disabled]')} ${type}`);
+            console.log(`  ${chalk.gray('[disabled]')} ${typeName}`);
+          } else if (ch.type === 'telegram' && ch.details.startsWith('Verified')) {
+            console.log(`  ${chalk.green('[verified]')} ${typeName}`);
+            console.log(chalk.dim(`    ${ch.details}`));
+          } else if (ch.type === 'telegram') {
+            console.log(`  ${chalk.yellow('[pending verification]')} ${typeName}`);
+            console.log(chalk.dim('    Start kyberbot to get a verification code'));
           } else {
-            console.log(`  ${chalk.green('[configured]')} ${type}`);
+            console.log(`  ${chalk.green('[configured]')} ${typeName}`);
           }
         }
 

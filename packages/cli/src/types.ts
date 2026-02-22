@@ -37,7 +37,10 @@ export interface IdentityConfig {
     host?: string;
   };
   channels?: {
-    telegram?: { bot_token: string };
+    telegram?: {
+      bot_token: string;
+      owner_chat_id?: number;
+    };
     whatsapp?: { enabled: boolean };
   };
   kybernesis?: {

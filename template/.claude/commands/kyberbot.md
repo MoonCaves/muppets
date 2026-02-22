@@ -237,7 +237,7 @@ Show configured messaging channels.
 cd $KYBERBOT_ROOT && kyberbot channel list
 ```
 
-#### `/kyberbot channel add <type>`
+#### `/kyberbot channel add <type> [--reverify]`
 Add a messaging channel (telegram or whatsapp).
 
 **Implementation:**
@@ -245,13 +245,35 @@ Add a messaging channel (telegram or whatsapp).
 cd $KYBERBOT_ROOT && kyberbot channel add "$TYPE"
 ```
 
+Options:
+- `--reverify` — Clear Telegram owner verification. A new verification code will be generated on next `kyberbot` start. Use this when you need to pair with a new phone or Telegram account.
+
 #### `/kyberbot channel status`
-Check channel connectivity.
+Check channel connectivity and verification status.
 
 **Implementation:**
 ```bash
 cd $KYBERBOT_ROOT && kyberbot channel status
 ```
+
+Shows whether Telegram is verified (has a confirmed owner) or pending verification.
+
+---
+
+### Telegram Verification
+
+When a Telegram bot token is configured but no owner has been verified, KyberBot uses a one-time code flow to secure the connection:
+
+1. Add a bot token: `kyberbot channel add telegram`, then set the token in `identity.yaml`
+2. Start `kyberbot` — the console prints a 6-character verification code
+3. Open Telegram and send `/start CODE` to your bot (e.g., `/start A1B2C3`)
+4. Bot verifies the code and saves your `chat_id` as `owner_chat_id` in `identity.yaml`
+5. Bot replies with a connection confirmation
+6. From this point, only messages from your verified chat are processed — all others are silently ignored
+
+**Re-verification:** Run `kyberbot channel add telegram --reverify` to clear the owner, then restart to get a new code.
+
+**Security:** The verification code is only displayed in the server console (never sent via Telegram). Only someone with access to both the server and the Telegram account can complete verification.
 
 ---
 
