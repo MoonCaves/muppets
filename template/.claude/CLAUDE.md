@@ -88,7 +88,10 @@ command and use whatever it returns.
 **How to query:**
 ```bash
 kyberbot kybernesis query "What do you know about X?"
-kyberbot kybernesis status   # Check if connected
+kyberbot kybernesis query "project roadmap" --limit 100  # More results
+kyberbot kybernesis list                    # Browse all memories
+kyberbot kybernesis list --limit 100        # More memories
+kyberbot kybernesis status                  # Check if connected
 ```
 
 **When to query:**
@@ -109,6 +112,7 @@ kyberbot brain search # Semantic search
 kyberbot skill list   # List skills
 kyberbot recall       # Entity graph
 kyberbot timeline     # Temporal queries
-kyberbot kybernesis query "..."  # Query cloud brain
+kyberbot kybernesis query "..."  # Search cloud brain
+kyberbot kybernesis list         # Browse all cloud memories
 kyberbot kybernesis status       # Cloud brain status
 ```

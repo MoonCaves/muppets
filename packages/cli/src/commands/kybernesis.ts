@@ -78,7 +78,52 @@ async function callMCPTool(apiKey: string, toolName: string, args: Record<string
 // COMMAND HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function handleQuery(message: string) {
+async function handleQuery(message: string, opts: { limit?: string }) {
+  const apiKey = requireApiKey();
+  const limit = opts.limit ? parseInt(opts.limit, 10) : 50;
+
+  try {
+    logger.debug(`Searching Kybernesis workspace memory (limit: ${limit})`);
+    const result = await callMCPTool(apiKey, 'kybernesis_search_memory', {
+      query: message,
+      limit,
+    });
+
+    if (result) {
+      console.log(result);
+    } else {
+      console.log('No results found.');
+    }
+  } catch (error) {
+    console.error(`Error querying Kybernesis: ${error}`);
+    process.exit(1);
+  }
+}
+
+async function handleList(opts: { limit?: string; offset?: string }) {
+  const apiKey = requireApiKey();
+  const limit = opts.limit ? parseInt(opts.limit, 10) : 50;
+  const offset = opts.offset ? parseInt(opts.offset, 10) : 0;
+
+  try {
+    logger.debug(`Listing Kybernesis memories (limit: ${limit}, offset: ${offset})`);
+    const result = await callMCPTool(apiKey, 'kybernesis_list_memories', {
+      limit,
+      offset,
+    });
+
+    if (result) {
+      console.log(result);
+    } else {
+      console.log('No memories found.');
+    }
+  } catch (error) {
+    console.error(`Error listing Kybernesis memories: ${error}`);
+    process.exit(1);
+  }
+}
+
+function requireApiKey(): string {
   const apiKey = getApiKey();
   if (!apiKey) {
     console.log('Kybernesis is not configured.');
@@ -91,23 +136,7 @@ async function handleQuery(message: string) {
     console.log('Or run `kyberbot onboard` to set up interactively.');
     process.exit(1);
   }
-
-  try {
-    logger.debug('Searching Kybernesis workspace memory');
-    const result = await callMCPTool(apiKey, 'kybernesis_search_memory', {
-      query: message,
-      limit: 10,
-    });
-
-    if (result) {
-      console.log(result);
-    } else {
-      console.log('No results found.');
-    }
-  } catch (error) {
-    console.error(`Error querying Kybernesis: ${error}`);
-    process.exit(1);
-  }
+  return apiKey;
 }
 
 async function handleStatus() {
@@ -146,7 +175,15 @@ export function createKybernesisCommand(): Command {
     .command('query')
     .description('Search the cloud brain')
     .argument('<message>', 'Search query for workspace memory')
+    .option('-l, --limit <n>', 'Max results (default: 50)')
     .action(handleQuery);
+
+  cmd
+    .command('list')
+    .description('List all memories in the cloud brain')
+    .option('-l, --limit <n>', 'Max results (default: 50)')
+    .option('-o, --offset <n>', 'Skip first N results (default: 0)')
+    .action(handleList);
 
   cmd
     .command('status')
