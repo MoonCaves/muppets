@@ -110,18 +110,11 @@ export function getClaudeMode(): 'agent-sdk' | 'sdk' {
 }
 
 /**
- * Get Kybernesis configuration if available.
- * Returns null if not configured.
+ * Get Kybernesis API key if configured.
+ * The API key is tied to a workspace — no agent_id needed.
  */
-export function getKybernesisConfig(): { agentId: string; apiKey: string } | null {
-  const apiKey = process.env.KYBERNESIS_API_KEY;
-  if (!apiKey) return null;
-
-  const identity = getIdentity();
-  const agentId = identity.kybernesis?.agent_id;
-  if (!agentId) return null;
-
-  return { agentId, apiKey };
+export function getKybernesisApiKey(): string | null {
+  return process.env.KYBERNESIS_API_KEY || null;
 }
 
 /**

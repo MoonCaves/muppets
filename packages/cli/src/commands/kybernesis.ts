@@ -1,7 +1,8 @@
 /**
  * Kybernesis Command
  *
- * Cloud brain interface — query and manage the Kybernesis cloud memory.
+ * Cloud brain interface — search and manage workspace memories via MCP.
+ * The API key is tied to a workspace; no agent_id needed.
  *
  * Usage:
  *   kyberbot kybernesis query "What do you know about X?"
@@ -9,42 +10,68 @@
  */
 
 import { Command } from 'commander';
-import { getKybernesisConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('kybernesis');
 
-const KYBERNESIS_API_BASE = 'https://api.kybernesis.ai/v1';
+const KYBERNESIS_MCP_URL = 'https://api.kybernesis.ai/mcp';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// API CLIENT
+// API CLIENT (MCP over HTTP)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface KybernesisResponse {
-  message?: string;
-  response?: string;
-  error?: string;
+interface MCPResponse {
+  result?: {
+    content?: Array<{ type: string; text: string }>;
+  };
+  error?: { code: number; message: string };
+  jsonrpc: string;
+  id: number;
 }
 
-async function queryKybernesis(agentId: string, apiKey: string, message: string): Promise<string> {
-  const url = `${KYBERNESIS_API_BASE}/agents/${agentId}/chat`;
+function getApiKey(): string | null {
+  return process.env.KYBERNESIS_API_KEY || null;
+}
 
-  const response = await fetch(url, {
+async function callMCPTool(apiKey: string, toolName: string, args: Record<string, unknown>): Promise<string | null> {
+  const response = await fetch(KYBERNESIS_MCP_URL, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
     },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { name: toolName, arguments: args },
+      id: Date.now(),
+    }),
   });
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Kybernesis API error (${response.status}): ${text}`);
+    throw new Error(`Kybernesis MCP error (${response.status}): ${text}`);
   }
 
-  const data = await response.json() as KybernesisResponse;
-  return data.response || data.message || JSON.stringify(data);
+  const text = await response.text();
+
+  // Parse SSE response (format: "event: message\ndata: {...}")
+  const dataMatch = text.match(/data:\s*(\{[\s\S]*\})/);
+  if (!dataMatch) {
+    // Try parsing as plain JSON
+    try {
+      const data = JSON.parse(text) as MCPResponse;
+      if (data.error) throw new Error(data.error.message);
+      return data.result?.content?.[0]?.text || null;
+    } catch {
+      throw new Error('Could not parse Kybernesis response');
+    }
+  }
+
+  const data = JSON.parse(dataMatch[1]) as MCPResponse;
+  if (data.error) throw new Error(data.error.message);
+  return data.result?.content?.[0]?.text || null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -52,23 +79,31 @@ async function queryKybernesis(agentId: string, apiKey: string, message: string)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function handleQuery(message: string) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.log('Kybernesis is not configured.');
+    console.log('');
+    console.log('Add KYBERNESIS_API_KEY to .env:');
+    console.log('  1. Sign up at https://kybernesis.ai');
+    console.log('  2. Go to Settings > API Keys');
+    console.log('  3. Create a key and add it to .env');
+    console.log('');
+    console.log('Or run `kyberbot onboard` to set up interactively.');
+    process.exit(1);
+  }
+
   try {
-    const config = getKybernesisConfig();
+    logger.debug('Searching Kybernesis workspace memory');
+    const result = await callMCPTool(apiKey, 'kybernesis_search_memory', {
+      query: message,
+      limit: 10,
+    });
 
-    if (!config) {
-      console.log('Kybernesis is not configured.');
-      console.log('');
-      console.log('To connect:');
-      console.log('  1. Add KYBERNESIS_API_KEY to .env');
-      console.log('  2. Add kybernesis.agent_id to identity.yaml');
-      console.log('');
-      console.log('Or run `kyberbot onboard` to set up interactively.');
-      process.exit(1);
+    if (result) {
+      console.log(result);
+    } else {
+      console.log('No results found.');
     }
-
-    logger.debug(`Querying Kybernesis agent ${config.agentId}`);
-    const response = await queryKybernesis(config.agentId, config.apiKey, message);
-    console.log(response);
   } catch (error) {
     console.error(`Error querying Kybernesis: ${error}`);
     process.exit(1);
@@ -76,30 +111,26 @@ async function handleQuery(message: string) {
 }
 
 async function handleStatus() {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.log('Kybernesis: not configured');
+    console.log('');
+    console.log('Add KYBERNESIS_API_KEY to .env to enable cloud memory.');
+    return;
+  }
+
+  console.log('Kybernesis: configured');
+  console.log(`  API key: ${apiKey.slice(0, 8)}...`);
+
+  // Test connectivity with a simple search
   try {
-    const config = getKybernesisConfig();
-
-    if (!config) {
-      console.log('Kybernesis: not configured');
-      console.log('');
-      console.log('Add KYBERNESIS_API_KEY to .env and kybernesis.agent_id to identity.yaml.');
-      return;
-    }
-
-    console.log('Kybernesis: configured');
-    console.log(`  Agent ID: ${config.agentId}`);
-    console.log(`  API key: ${config.apiKey.slice(0, 8)}...`);
-
-    // Test connectivity
-    try {
-      const response = await queryKybernesis(config.agentId, config.apiKey, 'ping');
-      console.log('  Status: connected');
-    } catch (error) {
-      console.log(`  Status: error (${error})`);
-    }
+    await callMCPTool(apiKey, 'kybernesis_search_memory', {
+      query: 'test',
+      limit: 1,
+    });
+    console.log('  Status: connected');
   } catch (error) {
-    console.error(`Error: ${error}`);
-    process.exit(1);
+    console.log(`  Status: error (${error})`);
   }
 }
 
@@ -109,12 +140,12 @@ async function handleStatus() {
 
 export function createKybernesisCommand(): Command {
   const cmd = new Command('kybernesis')
-    .description('Kybernesis cloud brain — query and manage cloud memory');
+    .description('Kybernesis cloud brain — search and manage workspace memory');
 
   cmd
     .command('query')
-    .description('Ask the cloud brain a question')
-    .argument('<message>', 'Question or query for the cloud brain')
+    .description('Search the cloud brain')
+    .argument('<message>', 'Search query for workspace memory')
     .action(handleQuery);
 
   cmd

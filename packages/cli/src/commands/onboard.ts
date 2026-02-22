@@ -319,35 +319,19 @@ export function createOnboardCommand(): Command {
       });
 
       let kybernesisApiKey = '';
-      let kybernesisAgentId = '';
       if (useKybernesis) {
-        console.log(chalk.dim('  To get your credentials:'));
+        console.log(chalk.dim('  To get your API key:'));
         console.log(chalk.dim('    1. Sign up at https://kybernesis.ai'));
-        console.log(chalk.dim('    2. Create an agent in your workspace'));
-        console.log(chalk.dim('    3. Go to Settings > API Keys and create a key'));
-        console.log(chalk.dim('    4. Copy the agent ID and API key\n'));
+        console.log(chalk.dim('    2. Go to Settings > API Keys'));
+        console.log(chalk.dim('    3. Create a new key and copy it\n'));
 
         const kybernesisKey = await input({
           message: 'Kybernesis API key:',
         });
 
-        const agentId = await input({
-          message: 'Kybernesis agent ID:',
-        });
-
-        if (kybernesisKey && agentId) {
+        if (kybernesisKey) {
           kybernesisApiKey = kybernesisKey;
-          kybernesisAgentId = agentId;
-
-          // Write kybernesis config to identity.yaml
-          const identityPath = join(root, 'identity.yaml');
-          const currentIdentity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, unknown>;
-          currentIdentity.kybernesis = { agent_id: agentId };
-          writeFileSync(identityPath, yaml.dump(currentIdentity, { lineWidth: 120 }));
-
           console.log(chalk.green('  Kybernesis cloud brain configured.\n'));
-        } else {
-          console.log(chalk.dim('  Incomplete credentials — skipping Kybernesis.\n'));
         }
       } else {
         console.log(chalk.dim('  Keeping all memory local.\n'));

@@ -77,8 +77,8 @@ My memory has two layers:
 
 ### Kybernesis Cloud Brain (if configured)
 
-If `KYBERNESIS_API_KEY` is set in `.env` and `kybernesis.agent_id` is in `identity.yaml`,
-I have a cloud brain that persists across devices and may contain richer context.
+If `KYBERNESIS_API_KEY` is set in `.env`, I have a cloud brain that persists
+across devices and may contain richer context.
 
 **When to query the cloud brain:**
 - At the start of a new session, to restore context
