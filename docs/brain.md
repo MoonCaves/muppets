@@ -36,7 +36,7 @@ ChromaDB provides semantic search over all stored memories. When the agent saves
 ChromaDB runs as a Docker container. Data is persisted to `data/chroma/` in your project directory.
 
 ```bash
-# ChromaDB starts automatically with kyberbot run
+# ChromaDB starts automatically with kyberbot
 # Manual control:
 kyberbot brain chroma start
 kyberbot brain chroma stop

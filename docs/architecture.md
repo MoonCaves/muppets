@@ -57,10 +57,10 @@ Both modes use the same brain, skills, and living documents.
 ├─────────────────────────┼───────────────────────────────────────┤
 │                    Core Services                                 │
 │                         │                                        │
-│  ┌──────────┐    ┌─────▼──────┐    ┌──────────────┐            │
-│  │Heartbeat │    │  Claude    │    │  Git Auto-   │            │
-│  │Scheduler │───▶│  Code      │    │  Sync        │            │
-│  └──────────┘    │  Runtime   │    └──────────────┘            │
+│  ┌──────────┐    ┌─────▼──────┐                                │
+│  │Heartbeat │    │  Claude    │                                │
+│  │Scheduler │───▶│  Code      │                                │
+│  └──────────┘    │  Runtime   │                                │
 │                  └─────┬──────┘                                  │
 │                        │                                         │
 ├────────────────────────┼────────────────────────────────────────┤
@@ -106,7 +106,7 @@ Both modes use the same brain, skills, and living documents.
 
 ## Service Startup Order
 
-When you run `kyberbot run`, services start in this order:
+When you run `kyberbot`, services start in this order:
 
 ```
 1. Configuration Loading
@@ -125,17 +125,14 @@ When you run `kyberbot run`, services start in this order:
    └─ Parse HEARTBEAT.md, calculate next run times
    └─ Start timer loop
 
-6. Git Auto-Sync
-   └─ Initialize watcher, set commit interval
-
-7. Channels
+6. Channels
    └─ Start Telegram bot (if configured)
    └─ Start WhatsApp bridge (if configured)
 
-8. HTTP Server
+7. HTTP Server
    └─ Listen for webhooks and channel messages
 
-9. Ready
+8. Ready
    └─ Display splash screen and service status
 ```
 

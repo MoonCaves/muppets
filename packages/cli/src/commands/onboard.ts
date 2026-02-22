@@ -405,7 +405,7 @@ export function createOnboardCommand(): Command {
       console.log(PRIMARY.bold(`  ${agentName} is alive.`));
       console.log();
       console.log(chalk.dim('  To start all services:'));
-      console.log(`    ${ACCENT('kyberbot run')}`);
+      console.log(`    ${ACCENT('kyberbot')}`);
       console.log();
       console.log(chalk.dim('  To start talking:'));
       console.log(`    ${ACCENT('cd')} ${root} ${ACCENT('&&')} ${ACCENT('claude')}`);

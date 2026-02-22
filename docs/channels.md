@@ -58,7 +58,7 @@ kyberbot channels telegram setup
 
 ### Step 3: Start the Channel
 
-If you used the setup command, Telegram will start automatically with `kyberbot run`. You can also start it independently:
+If you used the setup command, Telegram will start automatically with `kyberbot`. You can also start it independently:
 
 ```bash
 kyberbot channels telegram start

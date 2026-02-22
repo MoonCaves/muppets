@@ -59,7 +59,7 @@ If nothing needs attention, I return HEARTBEAT_OK (you never see this).
 ## Commands
 
 ```
-kyberbot run          # Start all services
+kyberbot              # Start all services
 kyberbot status       # Health dashboard
 kyberbot brain query  # Query the brain
 kyberbot brain search # Semantic search

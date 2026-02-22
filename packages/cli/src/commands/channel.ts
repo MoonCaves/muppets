@@ -140,7 +140,7 @@ export function createChannelCommand(): Command {
           console.log(chalk.dim('  Next steps:'));
           console.log(chalk.dim('  1. Get a bot token from @BotFather on Telegram'));
           console.log(chalk.dim('  2. Replace YOUR_BOT_TOKEN_HERE in identity.yaml'));
-          console.log(chalk.dim('  3. Run `kyberbot run` to connect'));
+          console.log(chalk.dim('  3. Run `kyberbot` to connect'));
           console.log('');
         } else if (type === 'whatsapp') {
           if (channels.whatsapp) {
@@ -158,7 +158,7 @@ export function createChannelCommand(): Command {
           console.log(chalk.green('\nWhatsApp channel added to identity.yaml'));
           console.log('');
           console.log(chalk.dim('  Next steps:'));
-          console.log(chalk.dim('  1. Run `kyberbot run` to start the pairing process'));
+          console.log(chalk.dim('  1. Run `kyberbot` to start the pairing process'));
           console.log(chalk.dim('  2. Scan the QR code with WhatsApp'));
           console.log('');
         }
@@ -253,7 +253,7 @@ export function createChannelCommand(): Command {
         }
 
         console.log('');
-        console.log(chalk.dim('  Channels connect when `kyberbot run` starts.'));
+        console.log(chalk.dim('  Channels connect when `kyberbot` starts.'));
         console.log('');
       } catch (error) {
         console.error(chalk.red(`Error: ${error}`));

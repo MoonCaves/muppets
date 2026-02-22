@@ -128,7 +128,7 @@ After completing onboarding, you will see:
  ✓ HEARTBEAT.md written
  ✓ identity.yaml configured
 
- Run 'kyberbot run' to start services, then 'claude' to chat.
+ Run 'kyberbot' to start services, then 'claude' to chat.
 ```
 
 ---
@@ -136,7 +136,7 @@ After completing onboarding, you will see:
 ## Starting Services
 
 ```bash
-kyberbot run
+kyberbot
 ```
 
 This starts the KyberBot runtime:
@@ -215,12 +215,12 @@ The agent will:
 
 ```bash
 # Start all services
-kyberbot run
+kyberbot
 
 # Start without specific services
-kyberbot run --no-sleep        # Disable sleep agent
-kyberbot run --no-channels     # Disable messaging channels
-kyberbot run --no-heartbeat    # Disable heartbeat scheduler
+kyberbot --no-sleep        # Disable sleep agent
+kyberbot --no-channels     # Disable messaging channels
+kyberbot --no-heartbeat    # Disable heartbeat scheduler
 
 # Other commands
 kyberbot status                # Show service status

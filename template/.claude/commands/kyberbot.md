@@ -237,12 +237,12 @@ Show health dashboard for all running services.
 cd $KYBERBOT_ROOT && kyberbot status
 ```
 
-#### `/kyberbot run`
+#### `/kyberbot start`
 Start all background services (ChromaDB, server, heartbeat, sleep agent, channels).
 
 **Implementation:**
 ```bash
-cd $KYBERBOT_ROOT && kyberbot run
+cd $KYBERBOT_ROOT && kyberbot
 ```
 
 ---
