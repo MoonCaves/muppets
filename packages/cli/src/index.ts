@@ -46,6 +46,7 @@ import { createSkillCommand } from './commands/skill.js';
 import { createChannelCommand } from './commands/channel.js';
 import { createStatusCommand } from './commands/status.js';
 import { createUpdateCommand } from './commands/update.js';
+import { createKybernesisCommand } from './commands/kybernesis.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VERSION
@@ -92,6 +93,7 @@ program.addCommand(createHeartbeatCommand());
 // Extensions
 program.addCommand(createSkillCommand());
 program.addCommand(createChannelCommand());
+program.addCommand(createKybernesisCommand());
 
 // When no subcommand is given, `run` executes as the default (isDefault: true).
 

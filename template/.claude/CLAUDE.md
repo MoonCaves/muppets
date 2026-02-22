@@ -67,10 +67,33 @@ If nothing needs attention, I return HEARTBEAT_OK (you never see this).
 
 ## Brain
 
+My memory has two layers:
+
+### Local Brain (always available)
 - **Entity Graph**: SQLite database tracking people, companies, projects
 - **Timeline**: Temporal event index with full-text search
 - **ChromaDB**: Vector search for semantic queries
 - **Sleep Agent**: Hourly maintenance (decay, tag, link, tier, summarize, entity hygiene)
+
+### Kybernesis Cloud Brain (if configured)
+
+If `KYBERNESIS_API_KEY` is set in `.env` and `kybernesis.agent_id` is in `identity.yaml`,
+I have a cloud brain that persists across devices and may contain richer context.
+
+**When to query the cloud brain:**
+- At the start of a new session, to restore context
+- When the user asks about something and local memory has no results
+- When the user explicitly asks to check the cloud brain
+- When I need background on people, projects, or decisions
+
+**How to query:**
+```bash
+kyberbot kybernesis query "What do you know about X?"
+kyberbot kybernesis status   # Check if connected
+```
+
+**Priority**: Try local memory first (`recall`, `search`, `timeline`). If empty or insufficient,
+query the cloud brain. Combine both sources when answering.
 
 ## Commands
 
@@ -82,4 +105,6 @@ kyberbot brain search # Semantic search
 kyberbot skill list   # List skills
 kyberbot recall       # Entity graph
 kyberbot timeline     # Temporal queries
+kyberbot kybernesis query "..."  # Query cloud brain
+kyberbot kybernesis status       # Cloud brain status
 ```

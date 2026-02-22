@@ -110,6 +110,21 @@ export function getClaudeMode(): 'agent-sdk' | 'sdk' {
 }
 
 /**
+ * Get Kybernesis configuration if available.
+ * Returns null if not configured.
+ */
+export function getKybernesisConfig(): { agentId: string; apiKey: string } | null {
+  const apiKey = process.env.KYBERNESIS_API_KEY;
+  if (!apiKey) return null;
+
+  const identity = getIdentity();
+  const agentId = identity.kybernesis?.agent_id;
+  if (!agentId) return null;
+
+  return { agentId, apiKey };
+}
+
+/**
  * Get preferred Claude model
  */
 export function getClaudeModel(): string {
