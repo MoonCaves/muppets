@@ -2,7 +2,7 @@
  * KyberBot — ASCII Splash Screen
  *
  * Displays the startup banner and service status.
- * Design: emerald green block-letter ASCII, clean layout.
+ * Design: emerald green block-letter ASCII inside a bordered box.
  */
 
 import chalk from 'chalk';
@@ -13,6 +13,7 @@ import { getAgentName } from './config.js';
 const EMERALD = chalk.hex('#50C878');  // Primary — logo, branding
 const PRIMARY = chalk.hex('#FF6B6B');  // Warm — ready message, agent name
 const DIM = chalk.dim;
+const BORDER = chalk.hex('#50C878');   // Border color
 
 const WIDTH = 76;
 
@@ -20,15 +21,44 @@ export function displaySplash(root: string): void {
   console.clear();
   console.log();
 
-  // ASCII logo — emerald gradient (light → deep)
-  console.log(chalk.hex('#A8F0C8').bold('  ██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ██████╗  ██████╗ ████████╗'));
-  console.log(chalk.hex('#82E8A8').bold('  ██║ ██╔╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝'));
-  console.log(chalk.hex('#5CDC88').bold('  █████╔╝  ╚████╔╝ ██████╔╝█████╗  ██████╔╝██████╔╝██║   ██║   ██║'));
-  console.log(chalk.hex('#3CCF6E').bold('  ██╔═██╗   ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗██╔══██╗██║   ██║   ██║'));
-  console.log(chalk.hex('#24C05A').bold('  ██║  ██╗   ██║   ██████╔╝███████╗██║  ██║██████╔╝╚██████╔╝   ██║'));
-  console.log(chalk.hex('#10B048').bold('  ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝    ╚═╝'));
-  console.log();
-  console.log(EMERALD('  Your AI.') + DIM(' Your rules. Powered by Claude Code.'));
+  // Bordered ASCII logo
+  const B = BORDER;
+  const INNER = 74; // inner width between ║ chars
+
+  // Art lines (raw, no leading spaces — we center them)
+  const artLines: [string, string][] = [
+    ['#A8F0C8', '██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ██████╗  ██████╗ ████████╗'],
+    ['#82E8A8', '██║ ██╔╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝'],
+    ['#5CDC88', '█████╔╝  ╚████╔╝ ██████╔╝█████╗  ██████╔╝██████╔╝██║   ██║   ██║'],
+    ['#3CCF6E', '██╔═██╗   ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗██╔══██╗██║   ██║   ██║'],
+    ['#24C05A', '██║  ██╗   ██║   ██████╔╝███████╗██║  ██║██████╔╝╚██████╔╝   ██║'],
+    ['#10B048', '╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝    ╚═╝'],
+  ];
+  const maxArtWidth = Math.max(...artLines.map(([, raw]) => raw.length));
+  const artPadLeft = Math.floor((INNER - maxArtWidth) / 2);
+
+  const artLine = (color: string, raw: string) => {
+    const rp = INNER - artPadLeft - raw.length;
+    return B('║') + ' '.repeat(artPadLeft) + chalk.hex(color).bold(raw) + ' '.repeat(rp) + B('║');
+  };
+
+  console.log(B('╔' + '═'.repeat(INNER) + '╗'));
+  console.log(B('║') + ' '.repeat(INNER) + B('║'));
+  for (const [color, raw] of artLines) {
+    console.log(artLine(color, raw));
+  }
+  console.log(B('║') + ' '.repeat(INNER) + B('║'));
+
+  // Tagline — centered
+  const tagPart1 = 'Personal AI Operating System. ';
+  const tagPart2 = 'Powered by Claude Code.';
+  const tagLen = tagPart1.length + tagPart2.length;
+  const tagPadLeft = Math.floor((INNER - tagLen) / 2);
+  const tagPadRight = INNER - tagLen - tagPadLeft;
+  console.log(B('║') + ' '.repeat(tagPadLeft) + DIM(tagPart1) + EMERALD(tagPart2) + ' '.repeat(tagPadRight) + B('║'));
+
+  console.log(B('║') + ' '.repeat(INNER) + B('║'));
+  console.log(B('╚' + '═'.repeat(INNER) + '╝'));
   console.log();
 
   // Metadata
