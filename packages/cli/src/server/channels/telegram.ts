@@ -22,6 +22,7 @@ import { getAgentName, getRoot } from '../../config.js';
 import { Channel, ChannelMessage } from './types.js';
 import { storeConversation } from '../../brain/store-conversation.js';
 import { buildChannelSystemPrompt } from './system-prompt.js';
+import { pushUserMessage, pushAssistantMessage, buildPromptWithHistory, clearHistory } from './conversation-history.js';
 
 const logger = createLogger('telegram');
 
@@ -97,6 +98,7 @@ export class TelegramChannel implements Channel {
 
       // ── Handle /start after verification ───────────────────────────────
       if (text === '/start') {
+        clearHistory(`telegram:${chatId}`);
         const agentName = getAgentName();
         const greeting = this.loadGreeting(agentName);
         await ctx.reply(greeting);
@@ -119,14 +121,23 @@ export class TelegramChannel implements Channel {
       if (this.messageHandler) {
         await this.messageHandler(message);
       } else {
-        // Default: route to agent
+        // Default: route to agent with conversation history
+        const convoId = `telegram:${chatId}`;
         try {
           const client = getClaudeClient();
-          const reply = await client.complete(text, { system: buildChannelSystemPrompt('telegram'), maxTurns: 30 });
+          const prompt = buildPromptWithHistory(convoId, text);
+          const reply = await client.complete(prompt, { system: buildChannelSystemPrompt('telegram'), maxTurns: 30 });
+
+          // Track both sides in history
+          pushUserMessage(convoId, text);
+
           if (!reply || reply.trim().length === 0) {
             logger.warn('Claude returned empty response, skipping reply');
             return;
           }
+
+          pushAssistantMessage(convoId, reply);
+
           // Telegram has a 4096 char limit per message
           if (reply.length > 4096) {
             const chunks = this.chunkMessage(reply, 4096);

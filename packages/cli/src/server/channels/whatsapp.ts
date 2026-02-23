@@ -12,6 +12,7 @@ import { Channel, ChannelMessage } from './types.js';
 import { join } from 'path';
 import { storeConversation } from '../../brain/store-conversation.js';
 import { buildChannelSystemPrompt } from './system-prompt.js';
+import { pushUserMessage, pushAssistantMessage, buildPromptWithHistory } from './conversation-history.js';
 
 const logger = createLogger('channel');
 
@@ -75,16 +76,24 @@ export class WhatsAppChannel implements Channel {
         if (this.messageHandler) {
           await this.messageHandler(message);
         } else {
+          const convoId = `whatsapp:${msg.key.remoteJid}`;
           try {
             const client = getClaudeClient();
-            const reply = await client.complete(text, {
+            const prompt = buildPromptWithHistory(convoId, text);
+            const reply = await client.complete(prompt, {
               system: buildChannelSystemPrompt('whatsapp'),
               maxTurns: 30,
             });
+
+            // Track both sides in history
+            pushUserMessage(convoId, text);
+
             if (!reply || reply.trim().length === 0) {
               logger.warn('Claude returned empty response, skipping reply');
               return;
             }
+
+            pushAssistantMessage(convoId, reply);
             await this.send(msg.key.remoteJid!, reply);
 
             // Fire-and-forget: store conversation in memory
