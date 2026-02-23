@@ -8,36 +8,36 @@ The brain is KyberBot's long-term memory system. It allows the agent to remember
 
 The brain consists of four components:
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Vector Store** | ChromaDB | Semantic search across all memories |
-| **Entity Graph** | SQLite | Track people, companies, projects, and relationships |
-| **Timeline** | SQLite | Temporal log of events and conversations |
-| **Sleep Agent** | Background process | Continuous memory maintenance and quality improvement |
+| Component | Purpose |
+|-----------|---------|
+| **Semantic Search** | Search across all memories by meaning |
+| **Entity Graph** | Track people, companies, projects, and relationships |
+| **Timeline** | Temporal log of events and conversations |
+| **Sleep Agent** | Continuous memory maintenance and quality improvement |
 
-All data lives locally in your KyberBot project directory. Nothing leaves your machine unless you opt into Kybernesis cloud sync.
+All data lives locally in your KyberBot project directory. Nothing leaves your machine unless you opt into Kybernesis Cloud sync.
 
 ---
 
-## ChromaDB -- Vector Store
+## Semantic Search
 
-ChromaDB provides semantic search over all stored memories. When the agent saves a piece of information, it is embedded as a vector and stored in ChromaDB, enabling meaning-based retrieval.
+The semantic search layer provides meaning-based retrieval over all stored memories. When the agent saves a piece of information, it is embedded as a vector and stored locally, enabling retrieval by meaning rather than exact keywords.
 
 ### How It Works
 
 1. Agent stores a memory (conversation summary, fact, note)
 2. The text is converted to a vector embedding
-3. The embedding is stored in ChromaDB with metadata (tags, timestamp, priority, tier)
+3. The embedding is stored with metadata (tags, timestamp, priority, tier)
 4. When searching, the query is embedded and compared against stored vectors
 5. Results are ranked by cosine similarity combined with keyword matching
 
 ### Storage
 
-ChromaDB runs as a Docker container. Data is persisted to `data/chromadb/` in your project directory. ChromaDB starts automatically when you run `kyberbot`.
+The semantic search engine runs as a Docker container. Data is persisted to `data/chromadb/` in your project directory. The container starts automatically when you run `kyberbot`.
 
 ### Metadata
 
-Each memory stored in ChromaDB includes:
+Each memory includes:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -53,9 +53,9 @@ Each memory stored in ChromaDB includes:
 
 ---
 
-## SQLite -- Entity Graph
+## Entity Graph
 
-The entity graph tracks discrete entities (people, companies, projects, places, topics) and the relationships between them. It is stored in a SQLite database at `data/entity-graph.db`.
+The entity graph tracks discrete entities (people, companies, projects, places, topics) and the relationships between them. It is stored locally at `data/entity-graph.db`.
 
 ### Entity Types
 
@@ -113,9 +113,9 @@ The agent also queries the entity graph during conversation when it needs to rec
 
 ---
 
-## SQLite -- Timeline
+## Timeline
 
-The timeline is a temporal log of events, conversations, and notes. It answers "when did X happen?" questions. Stored in `data/timeline.db`.
+The timeline is a temporal log of events, conversations, and notes. It answers "when did X happen?" questions. Stored locally at `data/timeline.db`.
 
 ### Schema
 
@@ -161,7 +161,7 @@ The `brain/` directory in your project root stores longer-form knowledge as mark
 - `brain/people/team.md` -- Team member profiles
 - `brain/decisions/architecture-choices.md` -- Decision log
 
-The agent reads and writes files in `brain/` as needed. These files are also indexed in ChromaDB for search.
+The agent reads and writes files in `brain/` as needed. These files are also indexed for semantic search.
 
 ---
 
@@ -278,7 +278,7 @@ kyberbot sleep health
 
 ### Sleep Database
 
-The sleep agent maintains its own SQLite database at `data/sleep.db` for tracking edges, cycle history, and tier transitions.
+The sleep agent maintains its own local database at `data/sleep.db` for tracking edges, cycle history, and tier transitions.
 
 ---
 
@@ -289,12 +289,12 @@ User Conversation
        │
        ▼
   ┌─────────┐     store      ┌──────────┐
-  │  Agent   │ ──────────────▶│ ChromaDB │
-  │ (Claude  │                │ (vectors)│
+  │  Agent   │ ──────────────▶│ Semantic │
+  │ (Claude  │                │ Search   │
   │  Code)   │     store      ├──────────┤
-  │          │ ──────────────▶│ SQLite   │
-  │          │                │(entities,│
-  │          │                │ timeline)│
+  │          │ ──────────────▶│ Entity   │
+  │          │                │ Graph &  │
+  │          │                │ Timeline │
   │          │     read       ├──────────┤
   │          │◀──────────────│ brain/   │
   │          │     write      │(markdown)│
@@ -320,10 +320,10 @@ User Conversation
 
 | File / Directory | Purpose |
 |------------------|---------|
-| `data/chromadb/` | ChromaDB persistent storage |
-| `data/entity-graph.db` | Entity graph (SQLite) |
-| `data/timeline.db` | Timeline (SQLite) |
-| `data/sleep.db` | Sleep agent state (SQLite) |
+| `data/chromadb/` | Semantic search persistent storage |
+| `data/entity-graph.db` | Entity graph (structured database) |
+| `data/timeline.db` | Timeline (structured database) |
+| `data/sleep.db` | Sleep agent state (structured database) |
 | `brain/` | Markdown knowledge files |
 | `heartbeat-state.json` | Heartbeat scheduler state |
 
@@ -331,4 +331,4 @@ User Conversation
 
 ## Privacy
 
-All brain data is stored locally in your project directory. The agent never sends memory data to external services unless you explicitly configure Kybernesis cloud sync. See [Kybernesis](kybernesis.md) for details on optional cloud sync.
+All brain data is stored locally in your project directory. The agent never sends memory data to external services unless you explicitly configure Kybernesis Cloud sync. See [Kybernesis](kybernesis.md) for details on optional cloud sync.

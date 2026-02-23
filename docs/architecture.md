@@ -93,12 +93,12 @@ All three modes use the same brain, skills, and living documents. The mode is de
 ├──────────────────────────────────────────────────────────────────┤
 │                        Brain                                     │
 │                                                                  │
-│  ┌────────────┐  ┌────────────┐  ┌─────────────┐               │
-│  │  ChromaDB  │  │    SQLite      │  │   brain/    │            │
-│  │  (Docker)  │  │                │  │ (markdown)  │            │
-│  │            │  │entity-graph.db │  │             │            │
-│  │  vectors,  │  │ timeline.db    │  │  knowledge  │            │
-│  │  metadata  │  │ sleep.db       │  │  documents  │            │
+│  ┌────────────┐  ┌────────────────┐  ┌─────────────┐            │
+│  │  Semantic  │  │  Structured DB │  │   brain/    │            │
+│  │  Search    │  │                │  │ (markdown)  │            │
+│  │            │  │ Entity Graph   │  │             │            │
+│  │  vectors,  │  │ Timeline       │  │  knowledge  │            │
+│  │  metadata  │  │ Sleep State    │  │  documents  │            │
 │  └────────────┘  └────────────────┘  └─────────────┘            │
 │                                                                  │
 │  ┌────────────────────────────────────────────┐                 │
@@ -108,12 +108,12 @@ All three modes use the same brain, skills, and living documents. The mode is de
 │  └────────────────────────────────────────────┘                 │
 │                                                                  │
 ├──────────────────────────────────────────────────────────────────┤
-│              Optional: Kybernesis Cloud Brain                    │
+│              Optional: Kybernesis Cloud                          │
 │                                                                  │
 │  ┌────────────────────────────────────────────┐                 │
-│  │  Cloud workspace memory (query endpoint)    │                 │
+│  │  Cloud workspace memory (query endpoint)   │                 │
 │  │  API key only — no sync, no push/pull       │                 │
-│  │  Complements local brain with cloud recall  │                 │
+│  │  Complements Kybernesis Local with cloud recall │                 │
 │  └────────────────────────────────────────────┘                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -128,10 +128,10 @@ When you run `kyberbot`, services start in this order:
 1. Configuration Loading
    └─ Read identity.yaml, .env, CLAUDE.md
 
-2. ChromaDB (Docker)
+2. Memory services (Docker)
    └─ Start container, wait for health check
 
-3. SQLite Databases
+3. Memory databases
    └─ Open/create entity-graph.db, timeline.db, sleep.db
 
 4. Sleep Agent
@@ -172,7 +172,7 @@ CLAUDE.md instructs Claude to read SOUL.md, USER.md
        ▼
 Agent processes message with full context
        │
-       ├──▶ Searches brain (ChromaDB + SQLite)
+       ├──▶ Searches brain (semantic search + structured queries)
        ├──▶ Queries entity graph
        ├──▶ Checks timeline
        ├──▶ Loads relevant skills
@@ -180,7 +180,7 @@ Agent processes message with full context
        ▼
 Agent generates response
        │
-       ├──▶ Stores new memories in ChromaDB
+       ├──▶ Stores new memories via semantic search
        ├──▶ Updates entity graph
        ├──▶ Logs to timeline
        ├──▶ Updates USER.md / SOUL.md (if new info)
@@ -278,10 +278,10 @@ my-agent/                          # Your KyberBot project
 │       └── SKILL.md               # Skill definition
 │
 ├── data/                          # Runtime data (gitignored)
-│   ├── chromadb/                  # ChromaDB persistent storage
-│   ├── entity-graph.db            # Entity graph (SQLite)
-│   ├── timeline.db                # Timeline (SQLite)
-│   ├── sleep.db                   # Sleep agent state (SQLite)
+│   ├── chromadb/                  # Semantic search persistent storage
+│   ├── entity-graph.db            # Entity graph database
+│   ├── timeline.db                # Timeline database
+│   ├── sleep.db                   # Sleep agent state database
 │   └── whatsapp-session/          # WhatsApp auth (if configured)
 │
 ├── .claude/                       # Claude Code configuration
@@ -361,15 +361,15 @@ Living documents, skills, and knowledge files are all markdown. This makes them:
 - Loadable as Claude Code context
 - Searchable with standard tools
 
-### Why SQLite + ChromaDB (Not Just One)
+### Why Two Storage Layers
 
-- ChromaDB excels at semantic search ("find memories about pricing")
-- SQLite excels at structured queries ("who is John connected to?", "what happened on Tuesday?")
+- **Semantic search** excels at finding memories by meaning ("find memories about pricing")
+- **Structured queries** excel at traversing relationships and time ("who is John connected to?", "what happened on Tuesday?")
 - Together they cover the full spectrum of memory access patterns
 
 ### Why Local-First
 
-All data lives on your machine by default. Kybernesis cloud brain is optional and query-based -- it complements local memory but never replaces it. This ensures:
+All data lives on your machine by default. Kybernesis Cloud is optional and query-based -- it complements Kybernesis Local but never replaces it. This ensures:
 
 - Privacy by default
 - No dependency on external services

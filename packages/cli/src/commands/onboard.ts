@@ -5,7 +5,7 @@
  *   Step 1: Agent identity (name, description, SOUL.md choice)
  *   Step 2: User identity (name, timezone, location, about)
  *   Step 3: Claude Code mode (subscription vs SDK)
- *   Step 4: Brain & heartbeat init (mkdir data/, init SQLite DBs)
+ *   Step 4: Brain & heartbeat init (mkdir data/, init memory DBs)
  *   Step 5: Kybernesis (optional cloud sync)
  *   Step 6: Channels (Telegram/WhatsApp - optional)
  *   Step 7: Done - show summary
@@ -24,6 +24,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import yaml from 'js-yaml';
 import { input, select, confirm } from '@inquirer/prompts';
 
+import { displayBanner } from '../splash.js';
+
 const EMERALD = chalk.hex('#50C878');
 const PRIMARY = chalk.hex('#FF6B6B');
 const ACCENT = chalk.hex('#FFE66D');
@@ -39,15 +41,7 @@ export function createOnboardCommand(): Command {
       // ─────────────────────────────────────────────────────────────────
 
       console.log();
-      console.log(chalk.hex('#A8F0C8').bold(`██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ██████╗  ██████╗ ████████╗`));
-      console.log(chalk.hex('#82E8A8').bold(`██║ ██╔╝╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝`));
-      console.log(chalk.hex('#5CDC88').bold(`█████╔╝  ╚████╔╝ ██████╔╝█████╗  ██████╔╝██████╔╝██║   ██║   ██║`));
-      console.log(chalk.hex('#3CCF6E').bold(`██╔═██╗   ╚██╔╝  ██╔══██╗██╔══╝  ██╔══██╗██╔══██╗██║   ██║   ██║`));
-      console.log(chalk.hex('#24C05A').bold(`██║  ██╗   ██║   ██████╔╝███████╗██║  ██║██████╔╝╚██████╔╝   ██║`));
-      console.log(chalk.hex('#10B048').bold(`╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝  ╚═════╝    ╚═╝`));
-      console.log();
-      console.log(EMERALD('  Your AI.') + chalk.dim(' Your rules. Powered by Claude Code.'));
-      console.log();
+      displayBanner();
 
       // ─────────────────────────────────────────────────────────────────
       // Step 1: Agent Identity
@@ -302,16 +296,15 @@ export function createOnboardCommand(): Command {
         console.log(chalk.green('  + docker-compose.yml'));
       }
 
-      console.log(chalk.dim('\n  SQLite databases will be created on first use.'));
-      console.log(chalk.dim('  For vector search, start ChromaDB: docker compose up -d'));
+      console.log(chalk.dim('\n  Memory databases will be created automatically on first launch.'));
 
       // ─────────────────────────────────────────────────────────────────
       // Step 5: Kybernesis (optional cloud sync)
       // ─────────────────────────────────────────────────────────────────
 
       console.log(chalk.bold.underline('\nStep 5 of 7: Cloud Sync\n'));
-      console.log(chalk.dim('  Your agent\'s memory is stored locally by default (SQLite + ChromaDB).'));
-      console.log(chalk.dim('  Kybernesis adds optional cloud backup and cross-device sync.\n'));
+      console.log(chalk.dim('  Your agent\'s memory is stored locally by default.'));
+      console.log(chalk.dim('  Kybernesis Cloud adds optional cross-device access to workspace memory.\n'));
 
       const useKybernesis = await confirm({
         message: 'Enable cloud memory sync via Kybernesis? (optional)',
@@ -331,7 +324,7 @@ export function createOnboardCommand(): Command {
 
         if (kybernesisKey) {
           kybernesisApiKey = kybernesisKey;
-          console.log(chalk.green('  Kybernesis cloud brain configured.\n'));
+          console.log(chalk.green('  Kybernesis Cloud configured.\n'));
         }
       } else {
         console.log(chalk.dim('  Keeping all memory local.\n'));
@@ -415,7 +408,7 @@ export function createOnboardCommand(): Command {
       console.log(chalk.green('  + USER.md          -- What the agent knows about you'));
       console.log(chalk.green('  + HEARTBEAT.md     -- Recurring task schedule'));
       console.log(chalk.green('  + .claude/CLAUDE.md -- Claude Code instructions'));
-      console.log(chalk.green('  + data/            -- SQLite databases'));
+      console.log(chalk.green('  + data/            -- Memory databases'));
       console.log(chalk.green('  + brain/           -- Knowledge base'));
       console.log(chalk.green('  + skills/          -- Auto-generated capabilities'));
       console.log(chalk.green('  + logs/            -- Service logs'));

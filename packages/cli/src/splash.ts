@@ -17,11 +17,7 @@ const BORDER = chalk.hex('#50C878');   // Border color
 
 const WIDTH = 76;
 
-export function displaySplash(root: string): void {
-  console.clear();
-  console.log();
-
-  // Bordered ASCII logo
+export function displayBanner(): void {
   const B = BORDER;
   const INNER = 74; // inner width between ║ chars
 
@@ -60,6 +56,13 @@ export function displaySplash(root: string): void {
   console.log(B('║') + ' '.repeat(INNER) + B('║'));
   console.log(B('╚' + '═'.repeat(INNER) + '╝'));
   console.log();
+}
+
+export function displaySplash(root: string): void {
+  console.clear();
+  console.log();
+
+  displayBanner();
 
   // Metadata
   let agentName: string;

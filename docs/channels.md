@@ -250,7 +250,7 @@ The agent's response is sent back through the originating channel. Long response
 
 ### 5. Memory
 
-The conversation is stored in the brain (ChromaDB) and timeline (SQLite) for future reference.
+The conversation is stored in memory for future reference.
 
 ---
 

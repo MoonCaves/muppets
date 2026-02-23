@@ -87,22 +87,24 @@ If nothing needs attention, I return HEARTBEAT_OK (you never see this).
 
 <!-- Auto-populated by skill registry -->
 
-## Brain
+## Memory
 
-My memory system:
+### Kybernesis Local
 
-- **Entity Graph**: SQLite database tracking people, companies, projects
+My local memory system — all data stored on this machine:
+
+- **Entity Graph**: Tracks people, companies, projects, and their relationships
 - **Timeline**: Temporal event index with full-text search
-- **ChromaDB**: Vector search for semantic queries
+- **Semantic Search**: Vector search for meaning-based queries
 - **Sleep Agent**: Hourly maintenance (decay, tag, link, tier, summarize, entity hygiene)
 
 <!-- BEGIN_KYBERNESIS -->
-### Kybernesis Cloud Brain
+### Kybernesis Cloud
 
-I also have a cloud brain with workspace memory that persists across devices and sessions.
+I also have cloud workspace memory that persists across devices and sessions.
 
-**IMPORTANT**: ALWAYS query Kybernesis when the user asks about something.
-Do not skip it just because local memory is empty — the cloud brain is the
+**IMPORTANT**: ALWAYS query Kybernesis Cloud when the user asks about something.
+Do not skip it just because local memory is empty — Kybernesis Cloud is the
 primary knowledge source, especially for a new agent. Run the command and
 use whatever it returns.
 
@@ -137,8 +139,8 @@ kyberbot timeline     # Temporal queries
 ```
 <!-- BEGIN_KYBERNESIS -->
 ```
-kyberbot kybernesis query "..."  # Search cloud brain
-kyberbot kybernesis list         # Browse all cloud memories
-kyberbot kybernesis status       # Cloud brain status
+kyberbot kybernesis query "..."  # Search Kybernesis Cloud
+kyberbot kybernesis list         # Browse cloud memories
+kyberbot kybernesis status       # Cloud connection status
 ```
 <!-- END_KYBERNESIS -->

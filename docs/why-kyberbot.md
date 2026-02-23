@@ -85,7 +85,7 @@ This is possible because Claude Code is a subscription product. You pay a flat m
 | **Language** | TypeScript | Python |
 | **Runtime** | Claude Code CLI | Custom Python server |
 | **LLM Access** | Claude Code subscription | API tokens (pay per use) |
-| **Memory** | ChromaDB + SQLite + sleep agent | Custom memory server |
+| **Memory** | Kybernesis Local + sleep agent | Custom memory server |
 | **Self-Evolution** | Agent updates SOUL.md, USER.md autonomously | Static configuration files |
 | **Skill Creation** | Agent generates skills on the fly | Manual tool registration in Python |
 | **Sub-Agents** | Native Claude Code sub-agents | Single agent loop |
@@ -107,7 +107,7 @@ This is possible because Claude Code is a subscription product. You pay a flat m
 | **Language** | TypeScript | Python |
 | **Runtime** | Claude Code CLI | Custom Python framework |
 | **LLM Access** | Claude Code subscription | API tokens (pay per use) |
-| **Memory** | ChromaDB + SQLite + sleep agent | Vector DB only |
+| **Memory** | Kybernesis Local + sleep agent | Vector DB only |
 | **Self-Evolution** | Full (SOUL.md, USER.md, skills) | None (static config) |
 | **Memory Maintenance** | Sleep agent (decay, tag, link, tier, summarize) | None |
 | **Scheduling** | HEARTBEAT.md | No built-in scheduler |

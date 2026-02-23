@@ -11,7 +11,7 @@ Before installing KyberBot, make sure you have:
 ### Required
 
 - **Node.js 18+** -- [Download](https://nodejs.org/)
-- **Docker** -- Required for ChromaDB (the vector database). [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- **Docker** -- Required for memory services. [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - **Claude Code subscription** -- KyberBot runs on top of Claude Code. You need an active subscription. [Get Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 
 ### Optional
@@ -117,7 +117,7 @@ How would you like to connect to Claude?
 
 #### Step 4: Initializing Brain
 
-The wizard creates directories (`data/`, `logs/`, `brain/`, `skills/`), copies template files into `.claude/`, writes `identity.yaml`, `SOUL.md`, `USER.md`, `HEARTBEAT.md`, and sets up the Docker Compose file for ChromaDB.
+The wizard creates directories (`data/`, `logs/`, `brain/`, `skills/`), copies template files into `.claude/`, writes `identity.yaml`, `SOUL.md`, `USER.md`, `HEARTBEAT.md`, and sets up the Docker Compose file for memory services.
 
 ```
   + data/
@@ -134,7 +134,7 @@ The wizard creates directories (`data/`, `logs/`, `brain/`, `skills/`), copies t
 
 #### Step 5: Cloud Sync / Kybernesis (Optional)
 
-Optionally connect to Kybernesis for cloud-backed workspace memory. This only requires an API key -- no other configuration. Your local and cloud brains are independent stores that complement each other.
+Optionally connect to Kybernesis for cloud-backed workspace memory. This only requires an API key -- no other configuration. Your Kybernesis Local and Cloud are independent stores that complement each other.
 
 ```
 Enable cloud memory sync via Kybernesis? (optional)
@@ -235,7 +235,7 @@ kyberbot
 
 This starts the KyberBot runtime:
 
-1. **ChromaDB** -- Starts the Docker container for vector search
+1. **Memory** -- Starts Docker services for search
 2. **Server** -- Express REST API for brain endpoints
 3. **Heartbeat Scheduler** -- Watches `HEARTBEAT.md` for recurring tasks
 4. **Sleep Agent** -- Begins background memory maintenance
@@ -269,7 +269,7 @@ Claude Code loads `CLAUDE.md`, which instructs it to behave as your KyberBot age
 The agent will:
 
 - Read `USER.md` to recall what it knows about you
-- Store new information to the brain (ChromaDB + entity graph)
+- Store new information to memory
 - Execute heartbeat tasks on schedule
 - Generate new skills when it encounters unfamiliar tasks
 
@@ -301,7 +301,7 @@ kyberbot update                     # Update CLI and refresh templates
 kyberbot update --check             # Preview available updates
 kyberbot update --templates         # Refresh templates only
 
-# Kybernesis cloud brain
+# Kybernesis Cloud
 kyberbot kybernesis query "..."     # Search cloud workspace memory
 kyberbot kybernesis list            # Browse all memories
 kyberbot kybernesis status          # Check connection status

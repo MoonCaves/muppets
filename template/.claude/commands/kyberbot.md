@@ -92,7 +92,7 @@ cd $KYBERBOT_ROOT && kyberbot brain query "$PROMPT"
 ```
 
 #### `/kyberbot brain status`
-Show brain health — entity graph, timeline, ChromaDB status.
+Show memory health — entity graph, timeline, and search status.
 
 **Implementation:**
 ```bash
@@ -320,7 +320,7 @@ cd $KYBERBOT_ROOT && kyberbot status
 ```
 
 #### `/kyberbot start`
-Start all background services (ChromaDB, server, heartbeat, sleep agent, channels).
+Start all background services (memory, server, heartbeat, sleep agent, channels).
 
 **Implementation:**
 ```bash

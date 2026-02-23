@@ -1,4 +1,4 @@
-# Kybernesis -- Optional Cloud Brain
+# Kybernesis -- Kybernesis Cloud
 
 Kybernesis is an optional cloud service that provides a queryable workspace memory for your KyberBot agent. It is entirely optional -- KyberBot works fully offline without it.
 
@@ -13,7 +13,7 @@ Kybernesis is a hosted AI workspace platform that provides:
 - **Web interface** for browsing and managing your workspace knowledge
 - **API access** to your workspace memory from external tools
 
-Local and cloud are independent memory stores that complement each other. The agent queries the cloud brain when local memory does not have what it needs, and cloud results fill gaps in local recall. There is no sync -- it is a search and retrieval layer.
+Kybernesis Local and Cloud are independent memory stores that complement each other. The agent queries Kybernesis Cloud when local memory does not have what it needs, and cloud results fill gaps in local recall. There is no sync -- it is a search and retrieval layer.
 
 ---
 
@@ -59,7 +59,7 @@ kyberbot kybernesis query "What do I know about project pricing?"
 # List recent memories with pagination
 kyberbot kybernesis list --limit 20 --offset 0
 
-# Check if cloud brain is reachable
+# Check if Kybernesis Cloud is reachable
 kyberbot kybernesis status
 ```
 
@@ -86,12 +86,12 @@ Your cloud memories are preserved in your Kybernesis workspace -- nothing is del
 
 ### What Kybernesis Sees
 
-When the cloud brain is configured, queries you send via `kyberbot kybernesis query` are processed by Kybernesis servers. Your workspace contains whatever memories you have stored there through the Kybernesis platform.
+When Kybernesis Cloud is configured, queries you send via `kyberbot kybernesis query` are processed by Kybernesis servers. Your workspace contains whatever memories you have stored there through the Kybernesis platform.
 
 ### What Kybernesis Does NOT See
 
 - Your `.env` file (API keys, tokens, secrets)
-- Your local brain (ChromaDB, SQLite databases, markdown files)
+- Your local memory (databases, markdown files)
 - WhatsApp/Telegram session data
 - Your Claude Code subscription credentials
 - Anything stored only on your machine

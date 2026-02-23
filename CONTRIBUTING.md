@@ -51,7 +51,7 @@ kyberbot/
 │   ├── cli/                   # Main KyberBot CLI
 │   │   ├── src/
 │   │   │   ├── commands/      # CLI command handlers
-│   │   │   ├── brain/         # Memory system (ChromaDB, SQLite, search)
+│   │   │   ├── brain/         # Memory system (search, entities, timeline)
 │   │   │   │   └── sleep/     # Sleep agent (decay, tag, link, tier, summarize)
 │   │   │   ├── server/        # HTTP server, brain API, channels
 │   │   │   │   └── channels/  # Messaging integrations (Telegram, WhatsApp)

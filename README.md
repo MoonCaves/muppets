@@ -101,13 +101,13 @@ Your agent maintains living documents that evolve over time:
 - **USER.md** -- Everything the agent knows about you. Preferences, projects, routines, goals.
 - **HEARTBEAT.md** -- Recurring tasks the agent should perform on a schedule (daily briefings, health checks, reminders).
 
-### Brain (Long-Term Memory)
+### Kybernesis Local (Long-Term Memory)
 
 KyberBot has a real memory system, not just context window tricks:
 
-- **ChromaDB** -- Vector database for semantic search across all memories
-- **SQLite Entity Graph** -- Tracks people, companies, projects, and their relationships
-- **SQLite Timeline** -- Temporal log of events, conversations, and notes
+- **Entity Graph** -- Tracks people, companies, projects, and their relationships
+- **Timeline** -- Temporal log of events, conversations, and notes
+- **Semantic Search** -- Vector-based search for meaning-based recall across all memories
 - **Sleep Agent** -- Background process that maintains memory quality (decay, tagging, linking, tiering, summarization, entity hygiene)
 - **Hybrid Search** -- 70% semantic + 30% keyword scoring for accurate recall
 
@@ -138,12 +138,12 @@ When your agent encounters a task it cannot handle, it creates a new skill:
 - Skills accumulate over time, making the agent permanently more capable
 - Full lifecycle management: list, create, remove, setup
 
-### Cloud Brain (Optional)
+### Kybernesis Cloud (Optional)
 
 Connect to [Kybernesis](https://kybernesis.ai) for cloud-backed workspace memory:
 
 - Query workspace memories from any device
-- Complements local brain -- cloud results fill gaps in local memory
+- Complements local memory -- cloud results fill gaps in local recall
 - API key only, no extra configuration
 - Disconnect anytime with `kyberbot kybernesis disconnect`
 
@@ -154,7 +154,7 @@ Connect to [Kybernesis](https://kybernesis.ai) for cloud-backed workspace memory
 KyberBot is not a framework that wraps an LLM. It is a layer on top of Claude Code that provides:
 
 1. **Identity** -- SOUL.md, USER.md, and HEARTBEAT.md loaded as context
-2. **Memory** -- ChromaDB + SQLite databases the agent reads and writes via CLI tools
+2. **Memory** -- Kybernesis Local databases the agent reads and writes via CLI tools
 3. **Scheduling** -- A heartbeat loop that invokes Claude via the Agent SDK for recurring tasks
 4. **Channels** -- Telegram/WhatsApp bridges that pipe messages to and from Claude
 5. **Skills** -- Markdown skill files that teach the agent new capabilities
@@ -181,12 +181,12 @@ Background operations (heartbeats, channel messages) use the Agent SDK (`@anthro
 │  │           │  │ WhatsApp  │  │  Subprocess)       │   │
 │  └─────┬─────┘  └─────┬─────┘  └─────────┬──────────┘   │
 ├────────┼──────────────┼──────────────────┼──────────────┤
-│        │        Brain │                  │              │
+│        │  Kybernesis  │                  │              │
+│        │    Local     │                  │              │
 │  ┌─────▼──────────────▼──────────────────▼──────────┐   │
-│  │  ChromaDB        SQLite          brain/          │   │
-│  │  (vectors)    (entities,      (markdown          │   │
-│  │               timeline,       knowledge)         │   │
-│  │               sleep state)                       │   │
+│  │  Semantic       Entity Graph     brain/          │   │
+│  │  Search         Timeline         (markdown       │   │
+│  │  (vectors)      (structured)     knowledge)      │   │
 │  └──────────────────────────────────────────────────┘   │
 │                                                         │
 │  ┌────────────────────────────────────────────────┐     │
@@ -195,10 +195,10 @@ Background operations (heartbeats, channel messages) use the Agent SDK (`@anthro
 │  │  entity hygiene                                │     │
 │  └────────────────────────────────────────────────┘     │
 ├─────────────────────────────────────────────────────────┤
-│           Optional: Kybernesis Cloud Brain              │
+│           Optional: Kybernesis Cloud                    │
 │  ┌────────────────────────────────────────────────┐     │
 │  │  Cloud workspace memory (query endpoint)       │     │
-│  │  API key only — complements local brain        │     │
+│  │  API key only — complements local memory       │     │
 │  └────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -211,7 +211,7 @@ Background operations (heartbeats, channel messages) use the Agent SDK (`@anthro
 |---------|----------|----------|----------|
 | **Runtime** | Claude Code (sub-agents, MCP, skills) | Custom Python framework | Custom Python framework |
 | **Cost** | $0 beyond Claude Code subscription | API token costs | API token costs |
-| **Memory** | ChromaDB + SQLite + sleep agent | Custom memory server | Vector DB only |
+| **Memory** | Kybernesis Local + sleep agent | Custom memory server | Vector DB only |
 | **Self-Evolution** | SOUL.md, USER.md auto-update | Static config | Static config |
 | **Skill Generation** | Agent creates its own skills | Manual tool registration | Manual tool registration |
 | **Scheduling** | HEARTBEAT.md natural language | Cron-based | No built-in scheduler |
@@ -228,11 +228,11 @@ Background operations (heartbeats, channel messages) use the Agent SDK (`@anthro
 - [Getting Started](docs/getting-started.md) -- Installation, onboarding, first conversation, updating
 - [Self-Evolution](docs/self-evolution.md) -- How the agent evolves its identity and knowledge
 - [Living Documents](docs/living-documents.md) -- SOUL.md, USER.md, HEARTBEAT.md reference
-- [Brain](docs/brain.md) -- Memory architecture (ChromaDB, SQLite, sleep agent)
+- [Brain](docs/brain.md) -- Memory architecture (Kybernesis Local, sleep agent)
 - [Skills](docs/skills.md) -- Skill system and auto-generation
 - [Channels](docs/channels.md) -- Telegram and WhatsApp messaging setup
 - [Architecture](docs/architecture.md) -- System overview, data flow, file structure
-- [Kybernesis Cloud](docs/kybernesis.md) -- Optional cloud brain
+- [Kybernesis Cloud](docs/kybernesis.md) -- Optional cloud memory
 - [Why KyberBot?](docs/why-kyberbot.md) -- Positioning and philosophy
 
 ---
