@@ -9,6 +9,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { getAgentName, getRoot } from '../../config.js';
+import { loadInstalledSkills } from '../../skills/loader.js';
 import { createLogger } from '../../logger.js';
 
 const logger = createLogger('system-prompt');
@@ -72,6 +73,22 @@ export function buildChannelSystemPrompt(channel: 'telegram' | 'whatsapp'): stri
     }
   } catch (err) {
     logger.debug('Failed to load CLAUDE.md for channel prompt', { error: String(err) });
+  }
+
+  // Load installed skills dynamically (always current, unlike CLAUDE.md which may be stale)
+  try {
+    const skills = loadInstalledSkills();
+    if (skills.length > 0) {
+      parts.push('\n## Installed Skills\n');
+      parts.push('These skills are available. When the user asks about something a skill handles, use that skill instead of guessing or searching memory.\n');
+      for (const skill of skills) {
+        parts.push(`- **${skill.name}**: ${skill.description}`);
+      }
+      parts.push('');
+      parts.push('To use a skill, read its full instructions at `skills/<name>/SKILL.md` and follow them.');
+    }
+  } catch (err) {
+    logger.debug('Failed to load skills for channel prompt', { error: String(err) });
   }
 
   return parts.join('\n');

@@ -63,9 +63,17 @@ allowed-tools: [Tool1, Bash(specific-command *)]
 [Concrete examples with bash commands or tool usage.]
 ```
 
-### Step 4: Execute Immediately
+### Step 4: Register the Skill
 
-After saving the skill:
+After saving the SKILL.md, rebuild CLAUDE.md so the new skill appears in the agent's operational manual:
+
+```bash
+kyberbot skill rebuild
+```
+
+### Step 5: Execute Immediately
+
+After registering the skill:
 1. Follow the skill's instructions to complete the original task
 2. Report success to the user
 3. Confirm the new skill is available for future use
@@ -89,8 +97,9 @@ Every generated skill must:
 ## Post-Generation
 
 After creating a skill:
-1. Notify the user: "I've created a new skill: [name]. This capability is now permanently available."
-2. Execute the original task using the new skill
+1. Run `kyberbot skill rebuild` to update CLAUDE.md
+2. Notify the user: "I've created a new skill: [name]. This capability is now permanently available."
+3. Execute the original task using the new skill
 
 ## Template Location
 
