@@ -39,6 +39,7 @@ Tasks in HEARTBEAT.md follow this exact structure:
 **Schedule**: every 4h / daily 9am / weekly Monday / every 30m
 **Window**: 09:00-17:00 (optional — restricts execution to these hours)
 **Action**: What the agent should do — written as a clear instruction
+**Skill**: skill-name (optional — references a skill in skills/ with detailed execution steps)
 ```
 
 The schedule field uses natural language that the heartbeat parser understands:
@@ -47,6 +48,8 @@ The schedule field uses natural language that the heartbeat parser understands:
 - `weekly Monday` / `weekly` — once per week
 
 The window field is optional — omit it if the task can run anytime during active hours.
+
+The **Skill** field is optional. When present, the heartbeat service automatically loads the full skill content from `skills/<skill-name>/SKILL.md` and injects it into the execution prompt. Use this when a task requires detailed, multi-step instructions that would be too verbose for the Action field alone. If the task already has a dedicated skill, reference it here instead of duplicating the instructions in Action.
 
 ## Implementation
 
@@ -93,6 +96,14 @@ The window field is optional — omit it if the task can run anytime during acti
 ### Weekly Summary
 **Schedule**: weekly Friday
 **Action**: Query the timeline for this week's events with `kyberbot timeline --week`. Summarize key decisions, people met, and progress made. Write the summary to brain/weekly-summaries/.
+```
+
+**User says:** "Check PostHog for new signups every 30 minutes" (after a skill has been created for it)
+```markdown
+### PostHog Signup Check
+**Schedule**: every 30m
+**Action**: Check for new signups and notify via Telegram if any found.
+**Skill**: posthog-signups
 ```
 
 ## Notes

@@ -17,6 +17,7 @@ import { getHeartbeatInterval, getIdentity, paths, getTimezone, getRoot } from '
 import { getClaudeClient } from '../claude.js';
 import { ServiceHandle } from '../types.js';
 import { storeConversation } from '../brain/store-conversation.js';
+import { getSkill } from '../skills/loader.js';
 
 const logger = createLogger('heartbeat');
 
@@ -85,11 +86,35 @@ async function tick(): Promise<void> {
       ? JSON.parse(readFileSync(stateFile, 'utf-8'))
       : { lastChecks: {} };
 
+    // Extract referenced skills from tasks and inline their content
+    const skillSections: string[] = [];
+    const skillRefs = content.match(/\*\*Skill\*\*:\s*(\S+)/g);
+    if (skillRefs) {
+      for (const ref of skillRefs) {
+        const skillName = ref.replace(/\*\*Skill\*\*:\s*/, '').trim();
+        const skill = getSkill(skillName);
+        if (skill) {
+          try {
+            const skillContent = readFileSync(join(skill.path, 'SKILL.md'), 'utf-8');
+            skillSections.push(`--- Skill: ${skillName} (skills/${skillName}/SKILL.md) ---`);
+            skillSections.push(skillContent);
+            skillSections.push('');
+          } catch {
+            logger.warn(`Failed to read skill: ${skillName}`);
+          }
+        }
+      }
+    }
+
     const prompt = [
-      'Read HEARTBEAT.md. Follow it strictly.',
-      'Check heartbeat-state.json to determine which task is most overdue.',
-      'Run only that task. Update heartbeat-state.json when done.',
-      'If nothing needs attention, reply HEARTBEAT_OK.',
+      'You are executing a heartbeat task. Follow these instructions exactly:',
+      '',
+      '1. Read the HEARTBEAT.md tasks below and the heartbeat-state.json timestamps.',
+      '2. Determine which task is most overdue based on its Schedule and last run time.',
+      '3. If a task has a **Skill** reference, the full skill instructions are included below — follow them step by step.',
+      '4. If a task has no **Skill** reference, execute the **Action** directly.',
+      '5. After completing the task, update heartbeat-state.json with the current time.',
+      '6. If nothing needs attention, reply with exactly: HEARTBEAT_OK',
       '',
       '--- HEARTBEAT.md ---',
       content,
@@ -97,13 +122,20 @@ async function tick(): Promise<void> {
       '--- heartbeat-state.json ---',
       JSON.stringify(state, null, 2),
       '',
+      ...(skillSections.length > 0 ? skillSections : []),
       `Current time: ${new Date().toISOString()}`,
       `Timezone: ${getTimezone()}`,
     ].join('\n');
 
     const client = getClaudeClient();
     const result = await client.complete(prompt, {
-      system: 'You are a heartbeat scheduler. Execute the most overdue task from HEARTBEAT.md. Return HEARTBEAT_OK if nothing needs attention.',
+      system: [
+        'You are a heartbeat task executor for a KyberBot agent.',
+        'You have full tool access — you can run Bash commands, read/write files, and make HTTP requests.',
+        'When a task references a **Skill**, follow the skill instructions exactly as written.',
+        'Execute only the single most overdue task, then stop.',
+        'If nothing needs attention, reply HEARTBEAT_OK.',
+      ].join(' '),
     });
 
     // Suppress HEARTBEAT_OK
