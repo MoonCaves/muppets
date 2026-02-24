@@ -114,51 +114,58 @@ export class ClaudeClient {
   }
 
   private async completeAgentSDK(prompt: string, opts: CompleteOptions): Promise<string> {
-    const { query } = await import('@anthropic-ai/claude-code');
-    let root: string;
     try {
-      root = getRoot();
-    } catch {
-      root = process.cwd();
-    }
+      const { query } = await import('@anthropic-ai/claude-code');
+      let root: string;
+      try {
+        root = getRoot();
+      } catch {
+        root = process.cwd();
+      }
 
-    const response = query({
-      prompt,
-      options: {
-        cwd: root,
-        maxTurns: opts.maxTurns ?? 10,
-        ...(opts.model ? { model: opts.model } : {}),
-        ...(opts.system ? { customSystemPrompt: opts.system } : {}),
-        permissionMode: 'bypassPermissions',
-      },
-    });
+      const response = query({
+        prompt,
+        options: {
+          cwd: root,
+          maxTurns: opts.maxTurns ?? 10,
+          ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.system ? { customSystemPrompt: opts.system } : {}),
+          permissionMode: 'bypassPermissions',
+        },
+      });
 
-    // Collect all assistant text blocks as fallback
-    let lastAssistantText = '';
-    for await (const message of response) {
-      if (message.type === 'assistant') {
-        const content = (message as any).message?.content;
-        if (Array.isArray(content)) {
-          const text = content
-            .filter((b: any) => b.type === 'text')
-            .map((b: any) => b.text)
-            .join('');
-          if (text) lastAssistantText = text;
-        }
-      } else if (message.type === 'result') {
-        const resultMsg = message as any;
-        if (resultMsg.subtype === 'success') {
-          // result field is the authoritative final text
-          if (resultMsg.result) return resultMsg.result;
-          // Agent may have done tool-only work (e.g. file edits) with no text reply
-          logger.debug('Agent SDK returned success with empty result');
-        } else {
-          logger.warn(`Agent SDK error: ${resultMsg.subtype}`);
+      // Collect all assistant text blocks as fallback
+      let lastAssistantText = '';
+      for await (const message of response) {
+        if (message.type === 'assistant') {
+          const content = (message as any).message?.content;
+          if (Array.isArray(content)) {
+            const text = content
+              .filter((b: any) => b.type === 'text')
+              .map((b: any) => b.text)
+              .join('');
+            if (text) lastAssistantText = text;
+          }
+        } else if (message.type === 'result') {
+          const resultMsg = message as any;
+          if (resultMsg.subtype === 'success') {
+            // result field is the authoritative final text
+            if (resultMsg.result) return resultMsg.result;
+            // Agent may have done tool-only work (e.g. file edits) with no text reply
+            logger.debug('Agent SDK returned success with empty result');
+          } else {
+            logger.warn(`Agent SDK error: ${resultMsg.subtype}`);
+          }
         }
       }
-    }
 
-    return lastAssistantText;
+      return lastAssistantText;
+    } catch (err) {
+      // Agent SDK failed (e.g. nested invocation, version mismatch) — fall back to subprocess
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.warn(`Agent SDK failed, falling back to subprocess: ${errMsg}`);
+      return this.completeSubprocess(prompt, opts);
+    }
   }
 
   private async completeSDK(

@@ -109,10 +109,12 @@ export async function extractRelationships(
       : text;
 
     const response = await client.complete(
-      `${EXTRACTION_PROMPT}\n\n## Conversation Text:\n${truncatedText}`,
+      `Extract entities and relationships from this conversation:\n\n${truncatedText}`,
       {
         model: 'haiku',
+        system: EXTRACTION_PROMPT,
         maxTokens,
+        maxTurns: 1,
       }
     );
 
@@ -150,7 +152,8 @@ export async function extractRelationships(
       relationships: validatedRelationships,
     };
   } catch (error) {
-    logger.error('Relationship extraction failed', { error });
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error('Relationship extraction failed', { error: errMsg });
     return { entities: [], relationships: [] };
   }
 }
