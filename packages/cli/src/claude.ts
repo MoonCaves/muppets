@@ -204,7 +204,9 @@ export class ClaudeClient {
 
   private completeSubprocess(prompt: string, opts: CompleteOptions): Promise<string> {
     return new Promise((resolve, reject) => {
-      const args = ['-p', prompt];
+      // Build flags first, then use '--' to separate the prompt
+      // (prompts starting with '---' confuse CLI option parsers)
+      const args = ['-p'];
       if (opts.system) {
         args.push('--system-prompt', opts.system);
       }
@@ -214,6 +216,7 @@ export class ClaudeClient {
       if (opts.maxTurns) {
         args.push('--max-turns', String(opts.maxTurns));
       }
+      args.push('--', prompt);
 
       const proc = spawn('claude', args, {
         env: {
