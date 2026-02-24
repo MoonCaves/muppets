@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { getAgentName, getRoot } from '../../config.js';
 import { loadInstalledSkills } from '../../skills/loader.js';
+import { loadInstalledAgents } from '../../agents/loader.js';
 import { getRecentActivity } from '../../brain/timeline.js';
 import { createLogger } from '../../logger.js';
 
@@ -95,6 +96,22 @@ export async function buildChannelSystemPrompt(channel: 'telegram' | 'whatsapp')
     }
   } catch (err) {
     logger.debug('Failed to load skills for channel prompt', { error: String(err) });
+  }
+
+  // Load installed agents for delegation awareness
+  try {
+    const agents = loadInstalledAgents();
+    if (agents.length > 0) {
+      parts.push('\n## Available Sub-Agents\n');
+      parts.push('These sub-agents can be spawned for specialized tasks. Delegate when a task benefits from a different perspective or isolated expertise.\n');
+      for (const agent of agents) {
+        parts.push(`- **${agent.name}** (${agent.model}): ${agent.description} — ${agent.role}`);
+      }
+      parts.push('');
+      parts.push('To spawn a sub-agent: `kyberbot agent spawn <name> "<prompt>"`');
+    }
+  } catch (err) {
+    logger.debug('Failed to load agents for channel prompt', { error: String(err) });
   }
 
   // Load recent cross-channel activity for continuity between sessions

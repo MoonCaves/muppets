@@ -31,6 +31,8 @@ const TEMPLATE_FILES = [
   ['.claude/commands/kyberbot.md', '.claude/commands/kyberbot.md'],
   ['.claude/skills/skill-generator.md', '.claude/skills/skill-generator.md'],
   ['.claude/skills/templates/skill-template.md', '.claude/skills/templates/skill-template.md'],
+  ['.claude/agents/templates/agent-template.md', '.claude/agents/templates/agent-template.md'],
+  ['.claude/skills/agent-generator.md', '.claude/skills/agent-generator.md'],
 ];
 
 /**
@@ -151,7 +153,7 @@ function refreshTemplates(root: string): string[] {
   // Ensure .claude/ subdirectories exist
   mkdirSync(join(root, '.claude', 'commands'), { recursive: true });
   mkdirSync(join(root, '.claude', 'skills', 'templates'), { recursive: true });
-  mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
+  mkdirSync(join(root, '.claude', 'agents', 'templates'), { recursive: true });
 
   // Back up CLAUDE.md before overwriting
   const claudeMdPath = join(root, '.claude', 'CLAUDE.md');

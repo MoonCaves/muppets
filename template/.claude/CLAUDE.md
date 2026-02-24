@@ -87,6 +87,20 @@ If nothing needs attention, I return HEARTBEAT_OK (you never see this).
 
 <!-- Auto-populated by skill registry -->
 
+## Sub-Agents
+
+<!-- Auto-populated by agent registry -->
+
+**When to delegate to a sub-agent:**
+- The task benefits from a different perspective or persona (code reviewer, security auditor)
+- Isolation is important — the work should run in its own context
+- Domain expertise needs a separate system prompt
+- You want a "second opinion" or adversarial review
+
+**How to spawn:** `kyberbot agent spawn <name> "<prompt>"`
+
+**When NOT to delegate:** Simple tasks you can do directly, tasks requiring conversation context, or tasks where the main agent's full context is needed.
+
 ## Memory
 
 ### Kybernesis Local
@@ -167,6 +181,8 @@ kyberbot status       # Health dashboard
 kyberbot brain query  # Query the brain
 kyberbot brain search # Semantic search
 kyberbot skill list   # List skills
+kyberbot agent list   # List sub-agents
+kyberbot agent spawn  # Spawn a sub-agent
 kyberbot recall       # Entity graph
 kyberbot remember     # Store a memory (terminal sessions)
 kyberbot timeline     # Temporal queries

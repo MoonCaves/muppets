@@ -44,6 +44,7 @@ import { createTimelineCommand } from './commands/timeline.js';
 import { createSleepCommand } from './commands/sleep.js';
 import { createHeartbeatCommand } from './commands/heartbeat.js';
 import { createSkillCommand } from './commands/skill.js';
+import { createAgentCommand } from './commands/agent.js';
 import { createChannelCommand } from './commands/channel.js';
 import { createStatusCommand } from './commands/status.js';
 import { createUpdateCommand } from './commands/update.js';
@@ -94,6 +95,7 @@ program.addCommand(createHeartbeatCommand());
 
 // Extensions
 program.addCommand(createSkillCommand());
+program.addCommand(createAgentCommand());
 program.addCommand(createChannelCommand());
 program.addCommand(createKybernesisCommand());
 

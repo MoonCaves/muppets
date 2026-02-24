@@ -5,19 +5,39 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { paths, getAgentName, getHeartbeatInterval, getKybernesisApiKey } from '../config.js';
 import { loadInstalledSkills } from './loader.js';
 import { InstalledSkill } from './types.js';
+import { loadInstalledAgents } from '../agents/loader.js';
+import { buildAgentSection } from '../agents/registry.js';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('skills');
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 /**
- * Rebuild the CLAUDE.md file with current skill information
+ * Resolve the source template CLAUDE.md from the KyberBot source repo.
+ * Falls back to the instance's .claude/CLAUDE.md if source is unavailable.
+ */
+function resolveTemplatePath(): string {
+  // __dirname = <monorepo>/packages/cli/dist/skills
+  const sourceTemplate = join(__dirname, '..', '..', '..', '..', 'template', '.claude', 'CLAUDE.md');
+  if (existsSync(sourceTemplate)) {
+    return sourceTemplate;
+  }
+  // Fallback: read from instance (markers may already be consumed)
+  return join(paths.root, '.claude', 'CLAUDE.md');
+}
+
+/**
+ * Rebuild the CLAUDE.md file with current skill and agent information.
+ * Always starts from the source template to ensure markers are present.
  */
 export function rebuildClaudeMd(): void {
-  const templatePath = join(paths.root, '.claude', 'CLAUDE.md');
+  const templatePath = resolveTemplatePath();
 
   if (!existsSync(templatePath)) {
     logger.warn('CLAUDE.md template not found');
@@ -65,8 +85,16 @@ export function rebuildClaudeMd(): void {
     skillSection || '*No skills installed yet. The agent will create them as needed.*'
   );
 
+  // Insert agent list
+  const agents = loadInstalledAgents();
+  const agentSection = buildAgentSection(agents);
+  content = content.replace(
+    /<!-- Auto-populated by agent registry -->/,
+    agentSection || '*No agents installed yet. Create one with `kyberbot agent create <name>`.*'
+  );
+
   writeFileSync(paths.claudeMd, content);
-  logger.info(`Rebuilt CLAUDE.md with ${skills.length} skills`);
+  logger.info(`Rebuilt CLAUDE.md with ${skills.length} skills and ${agents.length} agents`);
 }
 
 function buildSkillSection(skills: InstalledSkill[]): string {

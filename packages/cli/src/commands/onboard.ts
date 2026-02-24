@@ -166,7 +166,7 @@ export function createOnboardCommand(): Command {
 
       mkdirSync(join(root, '.claude', 'commands'), { recursive: true });
       mkdirSync(join(root, '.claude', 'skills', 'templates'), { recursive: true });
-      mkdirSync(join(root, '.claude', 'agents'), { recursive: true });
+      mkdirSync(join(root, '.claude', 'agents', 'templates'), { recursive: true });
       mkdirSync(join(root, 'skills', 'remember'), { recursive: true });
       mkdirSync(join(root, 'skills', 'recall'), { recursive: true });
       mkdirSync(join(root, 'skills', 'heartbeat-task'), { recursive: true });
@@ -179,6 +179,8 @@ export function createOnboardCommand(): Command {
         ['.claude/commands/kyberbot.md', '.claude/commands/kyberbot.md'],
         ['.claude/skills/skill-generator.md', '.claude/skills/skill-generator.md'],
         ['.claude/skills/templates/skill-template.md', '.claude/skills/templates/skill-template.md'],
+        ['.claude/agents/templates/agent-template.md', '.claude/agents/templates/agent-template.md'],
+        ['.claude/skills/agent-generator.md', '.claude/skills/agent-generator.md'],
         ['skills/remember/SKILL.md', 'skills/remember/SKILL.md'],
         ['skills/recall/SKILL.md', 'skills/recall/SKILL.md'],
         ['skills/heartbeat-task/SKILL.md', 'skills/heartbeat-task/SKILL.md'],
