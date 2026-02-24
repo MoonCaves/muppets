@@ -208,12 +208,19 @@ export class ClaudeClient {
       if (opts.system) {
         args.push('--system-prompt', opts.system);
       }
+      if (opts.model) {
+        args.push('--model', opts.model);
+      }
+      if (opts.maxTurns) {
+        args.push('--max-turns', String(opts.maxTurns));
+      }
 
       const proc = spawn('claude', args, {
         env: {
           ...process.env,
           // Must unset CLAUDECODE to avoid Claude Code detecting nested invocation
           CLAUDECODE: '',
+          CLAUDE_CODE_ENTRYPOINT: '',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
