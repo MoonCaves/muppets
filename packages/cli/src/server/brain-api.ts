@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import { getRoot } from '../config.js';
 import { searchEntities, getEntityContext, getEntityGraphStats } from '../brain/entity-graph.js';
 import { queryTimeline, getTimelineStats } from '../brain/timeline.js';
+import { hybridSearch } from '../brain/hybrid-search.js';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('brain-api');
@@ -100,7 +101,7 @@ export function createBrainRouter(): Router {
     }
   });
 
-  // Search brain (hybrid)
+  // Search brain (hybrid: semantic + keyword)
   router.post('/search', async (req: Request, res: Response) => {
     try {
       const { query, limit, tier, minPriority } = req.body;
@@ -108,8 +109,13 @@ export function createBrainRouter(): Router {
         res.status(400).json({ error: 'Query required' });
         return;
       }
-      // Hybrid search would be called here if ChromaDB is available
-      res.json({ query, results: [], message: 'Hybrid search requires ChromaDB' });
+      const root = getRoot();
+      const results = await hybridSearch(query, root, {
+        limit: parseInt(limit) || 20,
+        tier: tier || 'all',
+        minPriority: parseFloat(minPriority) || 0,
+      });
+      res.json({ query, results });
     } catch (error) {
       logger.error('Brain search failed', { error: String(error) });
       res.status(500).json({ error: 'Search failed' });
