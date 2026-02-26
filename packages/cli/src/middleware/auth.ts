@@ -23,9 +23,7 @@ export function getApiToken(): string {
   }
 
   apiToken = randomUUID();
-  logger.info('Generated new API token');
-  logger.info(`API Token: ${apiToken}`);
-  logger.info('Set KYBERBOT_API_TOKEN environment variable to persist this token');
+  logger.info('Generated new API token (set KYBERBOT_API_TOKEN to persist)');
 
   return apiToken;
 }

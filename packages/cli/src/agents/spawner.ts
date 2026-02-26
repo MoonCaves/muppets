@@ -9,7 +9,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { getAgentName, getRoot } from '../config.js';
 import { getClaudeClient, CompleteOptions } from '../claude.js';
-import { getAgent, loadInstalledAgents } from './loader.js';
+import { getAgent } from './loader.js';
 import { InstalledAgent, AgentSpawnResult } from './types.js';
 import { createLogger } from '../logger.js';
 
@@ -115,13 +115,3 @@ function buildSystemPrompt(agent: InstalledAgent): string {
   return parts.join('\n');
 }
 
-/**
- * Get a summary of available agents for system prompt integration
- */
-export function getAvailableAgents(): { name: string; description: string; role: string }[] {
-  return loadInstalledAgents().map(a => ({
-    name: a.name,
-    description: a.description,
-    role: a.role,
-  }));
-}

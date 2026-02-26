@@ -27,7 +27,7 @@ export function createBrainRouter(): Router {
       const root = getRoot();
       const query = req.query.q as string || '';
       const type = req.query.type as string | undefined;
-      const limit = parseInt(req.query.limit as string || '20');
+      const limit = Math.min(parseInt(req.query.limit as string || '20') || 20, 500);
 
       const results = await searchEntities(root, query, {
         type: type as any,
@@ -80,7 +80,7 @@ export function createBrainRouter(): Router {
         end: req.query.end as string,
         type: req.query.type as any,
         search: req.query.q as string,
-        limit: parseInt(req.query.limit as string || '50'),
+        limit: Math.min(parseInt(req.query.limit as string || '50') || 50, 500),
       });
       res.json({ events });
     } catch (error) {
@@ -111,7 +111,7 @@ export function createBrainRouter(): Router {
       }
       const root = getRoot();
       const results = await hybridSearch(query, root, {
-        limit: parseInt(limit) || 20,
+        limit: Math.min(parseInt(limit) || 20, 500),
         tier: tier || 'all',
         minPriority: parseFloat(minPriority) || 0,
       });

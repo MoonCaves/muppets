@@ -72,7 +72,7 @@ export async function startServer(options: {
       if (process.env.KYBERBOT_API_TOKEN) {
         logger.info('API authentication enabled');
       } else {
-        logger.info('API authentication disabled (set KYBERBOT_API_TOKEN to enable)');
+        logger.warn('API authentication DISABLED — brain endpoints are publicly accessible on this network. Set KYBERBOT_API_TOKEN in .env to secure them.');
       }
 
       resolve({

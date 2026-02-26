@@ -68,7 +68,10 @@ export async function hybridSearch(
 
   // Run both searches in parallel
   const [semanticResults, metadataResults] = await Promise.all([
-    semanticSearch(query, { limit: limit * 3, type }).catch(() => [] as SearchResult[]),
+    semanticSearch(query, { limit: limit * 3, type }).catch((err) => {
+      logger.debug('Semantic search unavailable, using keyword only', { error: String(err) });
+      return [] as SearchResult[];
+    }),
     metadataSearch(query, root, { limit: limit * 3 }),
   ]);
 
