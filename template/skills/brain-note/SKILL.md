@@ -1,7 +1,7 @@
 ---
 name: brain-note
 description: "Save long-form knowledge, research findings, architecture decisions, reference material, or structured notes to the brain/ directory for persistent retrieval. Use when the user shares detailed information that doesn't fit a single memory, discusses architecture or design decisions, provides reference material, shares meeting notes or research, or says save this to the brain, write this down, document this, or take notes on."
-allowed-tools: Read, Write, Edit, Glob, Bash(kyberbot brain *)
+allowed-tools: Read, Write, Edit, Glob, Bash(kyberbot brain *), Bash(kyberbot remember *)
 ---
 
 # Brain Note
@@ -77,10 +77,17 @@ Structure for **research/reference**:
 
 ### Step 3: Index It
 
-After writing, also store a summary in the memory pipeline so the note is discoverable via search and timeline:
+After writing, index the full note into Kybernesis Local (ChromaDB) so the content is discoverable via semantic search, then store a summary pointer in the timeline and entity graph:
+
 ```bash
+# Embed the full note content into ChromaDB
+kyberbot brain add brain/[filename].md --title "[descriptive title]" --type note
+
+# Store a summary pointer in timeline + entity graph
 kyberbot remember "Brain note: [brief description of what was documented]" --response "[one-line summary of key content]"
 ```
+
+Both steps are required — `brain add` makes the full content searchable by meaning, `remember` makes it discoverable in the timeline and entity graph.
 
 ### Step 4: Confirm
 
@@ -116,7 +123,8 @@ Running on bare EC2 instances with manual deploys...
 
 ## Notes
 
-- Brain notes are searchable via `kyberbot search` and `kyberbot brain query`.
+- Brain notes are fully indexed in Kybernesis Local — the content is embedded in ChromaDB (via `brain add`) and the summary is stored in the timeline and entity graph (via `remember`).
+- Notes are searchable via `kyberbot search`, `kyberbot brain query`, and `kyberbot brain search`.
 - Use `remember` for the event/fact stream, `brain-note` for the knowledge base. They complement each other.
 - Keep files focused. One file per project or topic area is better than one giant file.
 - Always include dates so future sessions know when information was captured.
