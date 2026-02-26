@@ -117,13 +117,43 @@ function checkForUpdates(repoPath: string): UpdateCheckResult {
 
 /**
  * Pull latest changes and rebuild the CLI.
+ * Stashes local changes before pulling and restores them after.
  */
 function pullAndBuild(repoPath: string): void {
+  // Stash any local changes so pull doesn't fail
+  let stashed = false;
+  try {
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+
+    if (status) {
+      console.log(chalk.dim('  Stashing local changes...'));
+      execFileSync('git', ['stash', '--include-untracked'], {
+        cwd: repoPath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      stashed = true;
+    }
+  } catch {
+    // If stash fails, continue anyway — pull will tell us if there's a real problem
+  }
+
   console.log(chalk.dim('  Pulling latest changes...'));
-  execFileSync('git', ['pull', 'origin', 'main'], {
-    cwd: repoPath,
-    stdio: 'inherit',
-  });
+  try {
+    execFileSync('git', ['pull', 'origin', 'main'], {
+      cwd: repoPath,
+      stdio: 'inherit',
+    });
+  } catch (err) {
+    // If pull fails even after stash, restore stash and re-throw
+    if (stashed) {
+      try { execFileSync('git', ['stash', 'pop'], { cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'] }); } catch {}
+    }
+    throw err;
+  }
 
   console.log(chalk.dim('\n  Installing dependencies...'));
   execFileSync('npm', ['install'], {
@@ -136,6 +166,20 @@ function pullAndBuild(repoPath: string): void {
     cwd: repoPath,
     stdio: 'inherit',
   });
+
+  // Restore stashed changes
+  if (stashed) {
+    try {
+      console.log(chalk.dim('\n  Restoring local changes...'));
+      execFileSync('git', ['stash', 'pop'], {
+        cwd: repoPath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch {
+      console.log(chalk.yellow('  Note: Could not restore local changes (likely superseded by the update).'));
+      console.log(chalk.dim('  Your changes are still saved in git stash. Run `git stash pop` manually if needed.'));
+    }
+  }
 }
 
 /**
