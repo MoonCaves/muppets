@@ -233,6 +233,8 @@ Background operations (heartbeats, channel messages) use the Agent SDK (`@anthro
 - [Channels](docs/channels.md) -- Telegram and WhatsApp messaging setup
 - [Architecture](docs/architecture.md) -- System overview, data flow, file structure
 - [Kybernesis Cloud](docs/kybernesis.md) -- Optional cloud memory
+- [VPS Deployment](docs/vps-deployment.md) -- Run KyberBot on a server for 24/7 uptime
+- [CLI Reference](docs/cli-reference.md) -- Complete command reference (16 commands, 38 subcommands)
 - [Why KyberBot?](docs/why-kyberbot.md) -- Positioning and philosophy
 
 ---
