@@ -63,7 +63,14 @@ allowed-tools: [Tool1, Bash(specific-command *)]
 [Concrete examples with bash commands or tool usage.]
 ```
 
-### Step 4: Register the Skill
+### Step 4: Setup (if needed)
+
+If the skill requires environment variables or external dependencies:
+1. Add required env vars to the skill's `requiresEnv` field
+2. Run `kyberbot skill setup <name>` to walk through configuration
+3. Or tell the user what to add to `.env`
+
+### Step 5: Register the Skill
 
 After saving the SKILL.md, rebuild CLAUDE.md so the new skill appears in the agent's operational manual:
 
@@ -71,7 +78,7 @@ After saving the SKILL.md, rebuild CLAUDE.md so the new skill appears in the age
 kyberbot skill rebuild
 ```
 
-### Step 5: Execute Immediately
+### Step 6: Execute Immediately
 
 After registering the skill:
 1. Follow the skill's instructions to complete the original task

@@ -91,6 +91,23 @@ Ask the brain a question. Gathers context from entity graph and timeline, synthe
 cd $KYBERBOT_ROOT && kyberbot brain query "$PROMPT"
 ```
 
+#### `/kyberbot brain add <file>`
+Index a file into ChromaDB for semantic search. Critical for the `brain-note` skill workflow — after writing a brain note, always run this to make the content searchable.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot brain add "$FILE"
+```
+
+Options:
+- `-t, --type <type>` — Document type: `conversation`, `idea`, `file`, `transcript`, `note`
+- `--title <title>` — Custom title for the indexed document
+
+Example (after writing a brain note):
+```bash
+cd $KYBERBOT_ROOT && kyberbot brain add brain/architecture-decisions.md --title "Architecture Decisions" -t note
+```
+
 #### `/kyberbot brain status`
 Show memory health — entity graph, timeline, and search status.
 
@@ -209,6 +226,14 @@ Show details about an installed skill.
 cd $KYBERBOT_ROOT && kyberbot skill info "$NAME"
 ```
 
+#### `/kyberbot skill setup <name>`
+Run a skill's setup script — installs dependencies, configures environment variables, or performs other initialization. Use this when a skill has `requiresEnv` fields or a setup step.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot skill setup "$NAME"
+```
+
 #### `/kyberbot skill remove <name>`
 Remove a skill and update CLAUDE.md.
 
@@ -218,7 +243,7 @@ cd $KYBERBOT_ROOT && kyberbot skill remove "$NAME"
 ```
 
 #### `/kyberbot skill rebuild`
-Rebuild CLAUDE.md with current skill list.
+Rebuild CLAUDE.md with current skill and agent lists. Run this after creating/removing skills or agents, or after changing `agent_name` in identity.yaml.
 
 **Implementation:**
 ```bash
@@ -309,6 +334,50 @@ cd $KYBERBOT_ROOT && kyberbot update --templates
 
 ---
 
+### Remote Access & API
+
+#### `/kyberbot tunnel setup`
+Configure ngrok authtoken for remote access to the local server.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot tunnel setup
+```
+
+#### `/kyberbot tunnel status`
+Check active ngrok tunnels.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot tunnel status
+```
+
+#### `/kyberbot tunnel start`
+Start an ngrok tunnel to the local server port.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot tunnel start
+```
+
+#### `/kyberbot token`
+Show the current API authentication token.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot token
+```
+
+#### `/kyberbot token regenerate`
+Generate a new API token and update `.env`.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot token regenerate
+```
+
+---
+
 ### System
 
 #### `/kyberbot status`
@@ -319,6 +388,9 @@ Show health dashboard for all running services.
 cd $KYBERBOT_ROOT && kyberbot status
 ```
 
+Options:
+- `--json` — Machine-readable JSON output
+
 #### `/kyberbot start`
 Start all background services (memory, server, heartbeat, sleep agent, channels).
 
@@ -326,6 +398,37 @@ Start all background services (memory, server, heartbeat, sleep agent, channels)
 ```bash
 cd $KYBERBOT_ROOT && kyberbot
 ```
+
+Options:
+- `--no-channels` — Start without Telegram/WhatsApp
+- `--no-sleep` — Start without sleep agent
+- `--no-heartbeat` — Start without heartbeat service
+- `-v, --verbose` — Enable debug logging
+
+#### `/kyberbot onboard`
+Run the initial setup wizard. An 8-step interactive process that configures agent identity, user info, Claude mode, brain initialization, Kybernesis cloud, remote access, and messaging channels.
+
+**Implementation:**
+```bash
+cd $KYBERBOT_ROOT && kyberbot onboard
+```
+
+---
+
+### Configuration Changes
+
+The agent can directly edit `identity.yaml` for these fields:
+
+| Field | How to Change |
+|-------|--------------|
+| `agent_name` | Edit identity.yaml, then `kyberbot skill rebuild` |
+| `agent_description` | Edit identity.yaml |
+| `timezone` | Edit identity.yaml (IANA format, e.g. `America/New_York`) |
+| `heartbeat_interval` | Edit identity.yaml (e.g. `15m`, `1h`, `30m`) |
+| `heartbeat_active_hours` | Edit identity.yaml (start/end times + timezone) |
+| `claude.model` | Edit identity.yaml (`opus`, `sonnet`, or `haiku`) |
+
+For channels and tunnel config, use the CLI commands instead of direct file editing.
 
 ---
 

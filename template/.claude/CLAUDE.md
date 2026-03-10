@@ -58,15 +58,33 @@ When a single message contains info about both, update BOTH files.
 | `brain/` | Long-term knowledge | I store insights, notes, context here |
 | `skills/` | My capabilities | Can't do something? I create a skill, then do it |
 | `.claude/agents/` | Sub-agents | Need a specialist? I scaffold one |
+| `identity.yaml` | Runtime config | I can change specific fields (see below) |
+
+### identity.yaml — What I Can Change
+
+I can edit these fields in `identity.yaml` when the user asks:
+
+| Field | Example User Request |
+|-------|---------------------|
+| `agent_name` | "Change your name to Atlas" |
+| `agent_description` | "You're my engineering assistant" |
+| `timezone` | "Switch to Pacific time", "I moved to London" |
+| `heartbeat_interval` | "Check less often", "every 15 minutes" |
+| `heartbeat_active_hours.start` / `.end` | "Only run during business hours", "stop checking after 10pm" |
+| `claude.model` | "Use sonnet", "switch to haiku" |
+
+After changing `agent_name`, run `kyberbot skill rebuild` to update CLAUDE.md with the new name.
+
+After changing `heartbeat_interval` or `heartbeat_active_hours`, the change takes effect on the next heartbeat cycle.
 
 ### What I Cannot Update
 
 | File | Why Protected |
 |------|--------------|
-| `identity.yaml` | Machine config (exceptions: `heartbeat_interval`, `claude.model`) |
-| `.env` | Credentials |
-| `CLAUDE.md` | Auto-generated (this file) |
+| `.env` | Credentials — tell the user what to add, don't write secrets directly |
+| `CLAUDE.md` | Auto-generated (this file) — use `kyberbot skill rebuild` to regenerate |
 | `.claude/settings.local.json` | Permissions |
+| `identity.yaml` fields not listed above | Server port, channel tokens, tunnel config — use `kyberbot channel`/`kyberbot tunnel` commands instead |
 
 ### Autonomous Skill Creation
 
@@ -75,13 +93,33 @@ When I encounter something I can't do:
 1. **Attempt** — try with existing tools
 2. **Recognize** — realize I need a new capability
 3. **Create** — generate a skill in `skills/`
-4. **Execute** — use it to complete the original task
-5. **Persist** — the skill is permanently available
+4. **Register** — run `kyberbot skill rebuild` to update CLAUDE.md
+5. **Execute** — use it to complete the original task
+6. **Persist** — the skill is permanently available
+
+### Autonomous Agent Creation
+
+When a task benefits from a different perspective, isolated expertise, or a separate persona:
+
+1. **Identify** — this task needs a specialist (code reviewer, security auditor, writing editor)
+2. **Create** — run `kyberbot agent create <name> -d "<description>" -r "<role>"`
+3. **Customize** — edit `.claude/agents/<name>.md` with detailed instructions
+4. **Register** — run `kyberbot agent rebuild` to update CLAUDE.md
+5. **Spawn** — run `kyberbot agent spawn <name> "<prompt>"` to delegate the task
 
 ## Heartbeat
 
 I check HEARTBEAT.md every {{HEARTBEAT_INTERVAL}}. I run the most overdue task, update state, and return.
 If nothing needs attention, I return HEARTBEAT_OK (you never see this).
+
+The heartbeat respects `heartbeat_active_hours` in `identity.yaml` — tasks won't run outside those hours. If the user says "only check during business hours" or "stop running at night", edit the `heartbeat_active_hours` field:
+
+```yaml
+heartbeat_active_hours:
+  start: "09:00"
+  end: "18:00"
+  timezone: "America/New_York"
+```
 
 ## Model
 
@@ -119,9 +157,13 @@ My local memory system — all data stored on this machine:
 
 - **Entity Graph**: Tracks people, companies, projects, and their relationships
 - **Timeline**: Temporal event index with full-text search
-- **Semantic Search**: Vector search for meaning-based queries
+- **Semantic Search**: Vector search for meaning-based queries via ChromaDB
 - **Sleep Agent**: Hourly maintenance (decay, tag, link, tier, summarize, entity hygiene)
 - **Auto-capture**: Telegram, WhatsApp, and heartbeat conversations are automatically stored in Timeline, Entity Graph, and Embeddings after each reply
+
+### Cross-Channel Awareness
+
+In messaging channels (Telegram, WhatsApp), the system prompt automatically includes recent activity from ALL channels — terminal, Telegram, WhatsApp, and heartbeat. This means I can reference what happened in other sessions without the user needing to repeat themselves.
 
 ### Terminal Sessions & Built-in Skills
 
@@ -142,16 +184,21 @@ Messaging channels (Telegram, WhatsApp) and heartbeat conversations are automati
 - A project or company is discussed and you need background
 - User asks about past interactions, decisions, or history
 - Historical context would improve the advice you're about to give
+- Multiple entities: `kyberbot recall "John,Project Alpha"` (comma-separated)
+- Filter by type: `kyberbot recall --type person` or `--type company`
 
 **`heartbeat-task`** — Add, update, or remove recurring tasks in HEARTBEAT.md whenever:
 - User describes something that should happen regularly ("every morning", "weekly", "check daily")
 - User changes or cancels an existing recurring task
+- User wants results delivered to Telegram, brain files, or another channel
 
 **`brain-note`** — Write structured knowledge to `brain/` files whenever:
 - Architecture or design decisions are discussed with rationale
 - Research findings or analysis results come up
 - Detailed meeting notes are shared (beyond what a single `remember` captures)
 - Reference material, specs, or documentation should be retained
+
+After writing a brain note, always index it: `kyberbot brain add brain/<filename>.md --title "<title>" --type note`
 
 Continue to update USER.md and SOUL.md directly when structured personal or identity information changes — the skills complement those files, they don't replace them.
 
@@ -189,25 +236,149 @@ When the user asks to update KyberBot (e.g. "update yourself", "get the latest v
 1. Run `kyberbot update` — this pulls the latest CLI source, rebuilds, and refreshes templates
 2. Report what changed to the user
 
-## Commands
+Options:
+- `kyberbot update --check` — preview what would change without modifying anything
+- `kyberbot update --templates` — only refresh template files, skip CLI source update
 
+## Commands — Full Reference
+
+### Services
+
+```bash
+kyberbot                          # Start all services (server, heartbeat, sleep, channels)
+kyberbot --no-channels            # Start without Telegram/WhatsApp
+kyberbot --no-sleep               # Start without sleep agent
+kyberbot --no-heartbeat           # Start without heartbeat
+kyberbot -v                       # Start with verbose/debug logging
+kyberbot status                   # Health dashboard for all services
+kyberbot status --json            # Machine-readable health output
 ```
-kyberbot              # Start all services
-kyberbot update       # Update CLI and refresh templates
-kyberbot status       # Health dashboard
-kyberbot brain query  # Query the brain
-kyberbot brain search # Semantic search
-kyberbot skill list   # List skills
-kyberbot agent list   # List sub-agents
-kyberbot agent spawn  # Spawn a sub-agent
-kyberbot recall       # Entity graph
-kyberbot remember     # Store a memory (terminal sessions)
-kyberbot timeline     # Temporal queries
+
+### Memory & Search
+
+```bash
+kyberbot recall "<entity>"                  # Look up a person, project, company
+kyberbot recall "<e1>,<e2>"                 # Look up multiple entities
+kyberbot recall --type person               # Filter by entity type
+kyberbot recall --json                      # JSON output
+
+kyberbot remember "<text>"                  # Store a memory (terminal sessions)
+kyberbot remember "<text>" -r "<response>"  # Store with agent response context
+kyberbot remember "<text>" -c telegram      # Tag with source channel
+
+kyberbot search "<query>"                   # Hybrid search (full-text + semantic)
+kyberbot search "<query>" --type note       # Filter: conversation, idea, file, transcript, note
+kyberbot search "<query>" --entity "John"   # Filter by entity mention
+kyberbot search "<query>" --entity "A,B" --entity-match any  # OR logic for entities
+kyberbot search "<query>" --after "last week"   # Date filter (natural language)
+kyberbot search "<query>" --before "yesterday"  # Date filter
+kyberbot search "<query>" --tier hot            # Filter by memory tier (hot/warm/cold)
+kyberbot search "<query>" --min-priority 5      # Filter by priority score
+kyberbot search "<query>" --group               # Group results by document
+kyberbot search "<query>" --semantic-only       # Skip full-text, semantic only
+kyberbot search "<query>" --limit 50            # Control result count
+kyberbot search "<query>" --json                # JSON output
+
+kyberbot timeline                   # Recent activity
+kyberbot timeline --today           # Today's events
+kyberbot timeline --yesterday       # Yesterday
+kyberbot timeline --week            # This week
+kyberbot timeline --search "topic"  # Search timeline
+kyberbot timeline --stats           # Memory statistics
 ```
+
+### Brain
+
+```bash
+kyberbot brain query "<prompt>"         # Ask the brain a question (synthesized answer)
+kyberbot brain search "<query>"         # Direct semantic search
+kyberbot brain add <file>               # Index a file into ChromaDB for semantic search
+kyberbot brain add <file> -t note       # With document type: conversation, idea, file, transcript, note
+kyberbot brain add <file> --title "X"   # With custom title
+kyberbot brain status                   # Brain health (ChromaDB, timeline, entity graph stats)
+```
+
+### Skills
+
+```bash
+kyberbot skill list              # Show all installed skills with status
+kyberbot skill create <name>     # Scaffold a new skill from template
+kyberbot skill info <name>       # Show skill details and metadata
+kyberbot skill setup <name>      # Run a skill's setup script (install dependencies, configure env)
+kyberbot skill remove <name>     # Remove a skill
+kyberbot skill rebuild           # Rebuild CLAUDE.md with current skills and agents
+```
+
+### Agents
+
+```bash
+kyberbot agent list              # Show installed sub-agents
+kyberbot agent create <name>     # Scaffold a new agent from template
+kyberbot agent create <name> -d "<desc>" -r "<role>" -m opus -t 10  # Full options
+kyberbot agent info <name>       # Show agent details
+kyberbot agent spawn <name> "<prompt>"  # Spawn an agent with a task
+kyberbot agent remove <name>     # Remove an agent
+kyberbot agent rebuild           # Rebuild CLAUDE.md with current agents
+```
+
+### Heartbeat
+
+```bash
+kyberbot heartbeat list          # Show all tasks with cadence and time windows
+kyberbot heartbeat status        # Show config, last run times, next due
+kyberbot heartbeat run           # Trigger an immediate heartbeat tick
+```
+
+### Sleep Agent
+
+```bash
+kyberbot sleep status            # Recent sleep cycle runs and metrics
+kyberbot sleep run               # Trigger immediate maintenance cycle
+kyberbot sleep health            # Health check (supports --json)
+kyberbot sleep edges             # Show discovered memory relationships
+kyberbot sleep merges            # Entity merge/cleanup audit trail
+```
+
+### Channels
+
+```bash
+kyberbot channel list            # Show configured messaging channels
+kyberbot channel add telegram    # Add Telegram channel
+kyberbot channel add whatsapp    # Add WhatsApp channel
+kyberbot channel add telegram --reverify  # Re-verify Telegram owner
+kyberbot channel remove <type>   # Remove a channel
+kyberbot channel status          # Check connectivity and verification
+```
+
+### Remote Access & API
+
+```bash
+kyberbot tunnel setup            # Configure ngrok authtoken for remote access
+kyberbot tunnel status           # Check active tunnels
+kyberbot tunnel start            # Start ngrok tunnel to local server
+
+kyberbot token                   # Show current API authentication token
+kyberbot token show              # Same as above
+kyberbot token regenerate        # Generate a new API token (updates .env)
+```
+
+### Update & Setup
+
+```bash
+kyberbot update                  # Full update: pull CLI source + refresh templates
+kyberbot update --check          # Preview what would change
+kyberbot update --templates      # Only refresh templates (skip CLI update)
+kyberbot onboard                 # Run the initial setup wizard (8-step process)
+```
+
 <!-- BEGIN_KYBERNESIS -->
-```
-kyberbot kybernesis query "..."  # Search Kybernesis Cloud
-kyberbot kybernesis list         # Browse cloud memories
-kyberbot kybernesis status       # Cloud connection status
+### Kybernesis Cloud
+
+```bash
+kyberbot kybernesis query "..."           # Search cloud memory
+kyberbot kybernesis query "..." --limit N # More results
+kyberbot kybernesis list                  # Browse all cloud memories
+kyberbot kybernesis list --limit N --offset N  # Paginate
+kyberbot kybernesis status               # Cloud connection status
 ```
 <!-- END_KYBERNESIS -->
