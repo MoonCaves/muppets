@@ -183,10 +183,17 @@ kyberbot kybernesis status                  # Check if connected
 Combine cloud results with local results when both have information.
 <!-- END_KYBERNESIS -->
 
+## Self-Update
+
+When the user asks to update KyberBot (e.g. "update yourself", "get the latest version", "kyberbot update"):
+1. Run `kyberbot update` — this pulls the latest CLI source, rebuilds, and refreshes templates
+2. Report what changed to the user
+
 ## Commands
 
 ```
 kyberbot              # Start all services
+kyberbot update       # Update CLI and refresh templates
 kyberbot status       # Health dashboard
 kyberbot brain query  # Query the brain
 kyberbot brain search # Semantic search
