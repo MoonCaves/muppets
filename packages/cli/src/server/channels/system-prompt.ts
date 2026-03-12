@@ -25,13 +25,24 @@ const logger = createLogger('system-prompt');
  * Includes: identity, personality, user context, operational knowledge,
  * and recent cross-channel activity for continuity.
  */
-export async function buildChannelSystemPrompt(channel: 'telegram' | 'whatsapp'): Promise<string> {
+export async function buildChannelSystemPrompt(channel: 'telegram' | 'whatsapp' | 'web'): Promise<string> {
   const agentName = getAgentName();
   const root = getRoot();
   const parts: string[] = [];
 
   // Channel-specific framing
-  if (channel === 'telegram') {
+  if (channel === 'web') {
+    parts.push(`You are ${agentName}, a personal AI agent. The user is messaging via the KyberBot web interface.`);
+    parts.push('You can use rich markdown formatting in responses — the web UI renders markdown with syntax highlighting.');
+    parts.push('');
+    parts.push('## Memory-First Protocol');
+    parts.push('Before responding to ANY message, proactively search your memory:');
+    parts.push('1. Run `kyberbot recall "<relevant entity or topic>"` to query the entity graph');
+    parts.push('2. Run `kyberbot search "<relevant keywords>"` for semantic search across stored knowledge');
+    parts.push('3. Run `kyberbot timeline --today` if the question relates to recent events');
+    parts.push('After each response, store important new information: `kyberbot remember "<facts>"`');
+    parts.push('The user can see your tool calls in real-time — using recall/search shows that you are drawing on your full memory, not just SOUL.md and USER.md.');
+  } else if (channel === 'telegram') {
     parts.push(`You are ${agentName}, a personal AI agent. The user is messaging via Telegram.`);
     parts.push('Keep responses concise — Telegram messages have a 4096 character limit.');
   } else {
@@ -87,16 +98,51 @@ export async function buildChannelSystemPrompt(channel: 'telegram' | 'whatsapp')
     const skills = loadInstalledSkills();
     if (skills.length > 0) {
       parts.push('\n## Installed Skills\n');
-      parts.push('These skills are available. When the user asks about something a skill handles, use that skill instead of guessing or searching memory.\n');
+      parts.push('These skills are available. When the user asks about something a skill handles, **use that skill** — read its full instructions at `skills/<name>/SKILL.md` and follow them.\n');
       for (const skill of skills) {
         parts.push(`- **${skill.name}**: ${skill.description}`);
       }
       parts.push('');
-      parts.push('To use a skill, read its full instructions at `skills/<name>/SKILL.md` and follow them.');
     }
   } catch (err) {
     logger.debug('Failed to load skills for channel prompt', { error: String(err) });
   }
+
+  // Skill creation guidance — always included so the agent creates skills, not ad-hoc scripts
+  parts.push('\n## Creating New Skills\n');
+  parts.push('When the user asks for a recurring or reusable capability that no existing skill handles:');
+  parts.push('');
+  parts.push('1. **Read the skill template** at `.claude/skills/templates/skill-template.md` — follow the exact format');
+  parts.push('2. **Read the heartbeat-task skill** at `skills/heartbeat-task/SKILL.md` if the task is recurring — follow its full setup workflow (clarify, resolve delivery, resolve credentials, create skill, register heartbeat, test, confirm)');
+  parts.push('3. **Create the skill** at `skills/<name>/SKILL.md`');
+  parts.push('4. Run `kyberbot skill rebuild` to register it');
+  parts.push('5. Execute the task immediately');
+  parts.push('');
+  parts.push('### SKILL.md Required Format');
+  parts.push('');
+  parts.push('```yaml');
+  parts.push('---');
+  parts.push('name: skill-name');
+  parts.push('description: "What this skill does. Use when [specific scenarios]. Also use when the user says [trigger phrases]."');
+  parts.push('allowed-tools: Bash(specific-command *), Read, Write, Edit');
+  parts.push('---');
+  parts.push('```');
+  parts.push('');
+  parts.push('Required sections: `## When to Use`, `## Implementation` (with numbered Steps), `## Examples` (with concrete bash commands).');
+  parts.push('');
+  parts.push('**Do NOT invent frontmatter fields.** Only use: `name`, `description`, `allowed-tools`, `version`.');
+  parts.push('');
+  parts.push('### HEARTBEAT.md Task Format');
+  parts.push('');
+  parts.push('```markdown');
+  parts.push('### Task Name');
+  parts.push('**Schedule**: every 30m / daily 9am / weekly Monday');
+  parts.push('**Window**: 09:00-17:00 (optional)');
+  parts.push('**Action**: What the agent should do');
+  parts.push('**Skill**: skill-name (references skills/<name>/SKILL.md)');
+  parts.push('```');
+  parts.push('');
+  parts.push('**NEVER create standalone bash scripts in a scripts/ directory.** All reusable capabilities must be skills.');
 
   // Load installed agents for delegation awareness
   try {

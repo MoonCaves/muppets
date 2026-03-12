@@ -14,7 +14,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.0",
+    "@anthropic-ai/claude-code": "^2.1.74",
     "@anthropic-ai/sdk": "^0.39.0",
     "@whiskeysockets/baileys": "^6.7.0",
     "better-sqlite3": "^11.0.0",

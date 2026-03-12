@@ -13,11 +13,16 @@ import { getServerPort, getIdentity, getRoot } from '../config.js';
 import { authMiddleware, getApiToken } from '../middleware/auth.js';
 import { createBrainRouter } from './brain-api.js';
 import { executeHandler } from './execute-api.js';
+import { createWebApiRouter } from './web-api.js';
+import { chatSseHandler } from './chat-sse.js';
 import { ServiceHandle } from '../types.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import { Channel } from './channels/types.js';
 import http from 'http';
+import { join, dirname } from 'path';
+import { existsSync } from 'fs';
+import { fileURLToPath } from 'url';
 
 const logger = createLogger('server');
 
@@ -45,6 +50,34 @@ export async function startServer(options: {
 
   // Execute API (authenticated)
   app.post('/api/execute', authMiddleware, executeHandler);
+
+  // Chat SSE (authenticated) — must be before the web router
+  app.post('/api/web/chat', authMiddleware, chatSseHandler);
+
+  // Web API (authenticated)
+  app.use('/api/web', authMiddleware, createWebApiRouter());
+
+  // Serve web UI static files
+  try {
+    // Try to find @kyberbot/web dist directory
+    const webDistPaths = [
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'web', 'dist'),
+      join(process.cwd(), 'node_modules', '@kyberbot', 'web', 'dist'),
+    ];
+
+    for (const distPath of webDistPaths) {
+      if (existsSync(join(distPath, 'index.html'))) {
+        app.use('/ui', express.static(distPath));
+        app.get('/ui/*', (_req, res) => {
+          res.sendFile(join(distPath, 'index.html'));
+        });
+        logger.info(`Web UI serving from ${distPath}`);
+        break;
+      }
+    }
+  } catch (err) {
+    logger.debug('Web UI not available', { error: String(err) });
+  }
 
   // Start channels if configured
   if (options.enableChannels !== false) {
@@ -78,6 +111,8 @@ export async function startServer(options: {
       } else {
         logger.warn('API authentication DISABLED — brain endpoints are publicly accessible on this network. Set KYBERBOT_API_TOKEN in .env to secure them.');
       }
+
+      logger.info(`Web UI: http://localhost:${port}/ui`);
 
       resolve({
         stop: async () => {
