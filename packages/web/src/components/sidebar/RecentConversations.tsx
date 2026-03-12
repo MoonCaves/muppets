@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useConversations, type SessionSummary } from '../../hooks/useConversations';
+import { useConversations } from '../../hooks/useConversations';
 import ConversationsModal from './ConversationsModal';
 
 function formatRelativeTime(iso: string): string {

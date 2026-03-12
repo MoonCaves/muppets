@@ -30,6 +30,7 @@ function ensureDatabase(root: string): Database.Database {
       id TEXT PRIMARY KEY,
       channel TEXT NOT NULL DEFAULT 'web',
       title TEXT,
+      claude_session_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

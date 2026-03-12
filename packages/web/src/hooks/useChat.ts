@@ -57,7 +57,6 @@ export function useChat() {
 
   const loadSession = useCallback(async (sessionId: string) => {
     try {
-      setCurrentSession({ id: sessionId });
       const msgData = await apiGet<{ messages: Array<{
         id: number; role: 'user' | 'assistant'; content: string;
         toolCalls?: ToolCall[]; memoryUpdates?: string[];
@@ -74,9 +73,10 @@ export function useChat() {
         usage: m.usage,
         costUsd: m.costUsd ?? undefined,
       })));
+      setCurrentSession({ id: sessionId });
       setSessionUsage({ messages: 0, inputTokens: 0, outputTokens: 0, estimatedCost: 0 });
     } catch {
-      // Failed to load session
+      // Failed to load session — don't switch
     }
   }, []);
 

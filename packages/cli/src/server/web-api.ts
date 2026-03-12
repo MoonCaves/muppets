@@ -213,13 +213,14 @@ export function createWebApiRouter(): Router {
   return router;
 }
 
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>, depth = 0): void {
+  if (depth > 10) return;
   for (const key of Object.keys(source)) {
     const srcVal = source[key];
     const tgtVal = target[key];
     if (srcVal && typeof srcVal === 'object' && !Array.isArray(srcVal) &&
         tgtVal && typeof tgtVal === 'object' && !Array.isArray(tgtVal)) {
-      deepMerge(tgtVal as Record<string, unknown>, srcVal as Record<string, unknown>);
+      deepMerge(tgtVal as Record<string, unknown>, srcVal as Record<string, unknown>, depth + 1);
     } else {
       target[key] = srcVal;
     }
