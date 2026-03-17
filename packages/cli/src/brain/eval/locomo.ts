@@ -1,11 +1,15 @@
 /**
- * KyberBot — LoCoMo Long-Term Memory Benchmark
+ * KyberBot -- LoCoMo Long-Term Memory Benchmark
  *
- * Evaluates KyberBot's memory pipeline against the LoCoMo dataset:
- *   1. Ingest each conversation's turns into ChromaDB with ±1 turn context windows
- *   2. Query using ChromaDB semantic search + entity graph for each QA item
- *   3. Score answers using token-level F1 with Porter stemming
- *   4. Report per-category and overall accuracy
+ * Evaluates KyberBot's REAL production memory pipeline against the LoCoMo dataset:
+ *   1. Ingest each conversation via storeConversation() (production ingestion)
+ *   2. Extract observations via runObserveStep() (production fact extraction)
+ *   3. Query using hybridSearch() (production retrieval)
+ *   4. Score answers using token-level F1 with Porter stemming
+ *   5. Report per-category and overall accuracy
+ *
+ * This benchmark tests the actual system, not a custom pipeline -- the score
+ * reflects real production quality.
  *
  * Reference: https://arxiv.org/abs/2402.07375
  *
@@ -18,16 +22,22 @@
  *   });
  */
 
-import { readFileSync } from 'fs';
-import { mkdtempSync, rmSync } from 'fs';
-import { mkdirSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import Database from 'better-sqlite3';
-import { ChromaClient, type IEmbeddingFunction } from 'chromadb';
-import OpenAI from 'openai';
+import { ChromaClient } from 'chromadb';
 import { getClaudeClient } from '../../claude.js';
 import { createLogger } from '../../logger.js';
+import { resetConfig } from '../../config.js';
+import { storeConversation } from '../store-conversation.js';
+import { hybridSearch } from '../hybrid-search.js';
+import { initializeEmbeddings, isChromaAvailable, resetEmbeddings } from '../embeddings.js';
+import { resetTimelineDb } from '../timeline.js';
+import { resetEntityGraphDb } from '../entity-graph.js';
+import { resetSleepDb } from '../sleep/db.js';
+import { runObserveStep } from '../sleep/steps/observe.js';
+import { DEFAULT_CONFIG } from '../sleep/config.js';
 
 const logger = createLogger('eval');
 
@@ -88,7 +98,7 @@ export interface LoCoMoResult {
 }
 
 /**
- * Run the LoCoMo benchmark against KyberBot's memory pipeline.
+ * Run the LoCoMo benchmark against KyberBot's production memory pipeline.
  */
 export async function runLoCoMoBenchmark(
   options: LoCoMoOptions
@@ -100,37 +110,15 @@ export async function runLoCoMoBenchmark(
     verbose = false,
   } = options;
 
-  // Fail fast if required env vars are missing
-  if (!process.env.OPENAI_API_KEY) {
+  // Initialize ChromaDB via production pipeline
+  await initializeEmbeddings();
+  if (!isChromaAvailable()) {
     throw new Error(
-      'OPENAI_API_KEY environment variable is required for ChromaDB embeddings'
+      'ChromaDB is required for LoCoMo benchmark. Start with: docker-compose up -d'
     );
   }
 
   const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8001';
-  const chroma = new ChromaClient({ path: chromaUrl });
-
-  // Verify ChromaDB is reachable
-  try {
-    await chroma.heartbeat();
-  } catch (err) {
-    throw new Error(
-      `ChromaDB is not available at ${chromaUrl}. ` +
-      `Start ChromaDB or set CHROMA_URL. Error: ${String(err)}`
-    );
-  }
-
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const embedder: IEmbeddingFunction = {
-    generate: async (texts: string[]) => {
-      const resp = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: texts,
-      });
-      return resp.data.map((d) => d.embedding);
-    },
-  };
-
   const categorySet = new Set(categories);
 
   // Load dataset
@@ -153,6 +141,9 @@ export async function runLoCoMoBenchmark(
     categoryScores[cat] = { total: 0, sum: 0 };
   }
 
+  // Save original env so we can restore it after the benchmark
+  const originalRoot = process.env.KYBERBOT_ROOT;
+
   for (const conv of conversations) {
     const sampleId = conv.sample_id;
     conversationScores[sampleId] = { total: 0, sum: 0 };
@@ -161,41 +152,56 @@ export async function runLoCoMoBenchmark(
     const qaItems = conv.qa.filter((q) => categorySet.has(q.category));
     logger.info(`Evaluating ${sampleId}: ${qaItems.length} questions`);
 
-    // Create isolated temporary brain for entity graph + timeline FTS
+    // Create isolated temporary brain for this conversation
     const tempRoot = mkdtempSync(join(tmpdir(), `kyberbot-locomo-${sampleId}-`));
+    mkdirSync(join(tempRoot, 'data'), { recursive: true });
 
-    // Create a ChromaDB collection name that is 3-63 chars, alphanumeric + underscores only
-    const collectionName = `locomo_conv_${sampleId.replace(/[^a-zA-Z0-9]/g, '_')}`.slice(0, 63);
+    // Write minimal identity.yaml for the production pipeline
+    writeFileSync(
+      join(tempRoot, 'identity.yaml'),
+      'agent_name: LoCoMo Benchmark\ntimezone: UTC\nheartbeat_interval: 30m\n'
+    );
 
     try {
-      // Phase 1: Ingest conversation sessions into ChromaDB + entity graph
-      const collection = await chroma.getOrCreateCollection({
-        name: collectionName,
-        embeddingFunction: embedder,
-        metadata: { 'hnsw:space': 'cosine' },
-      });
+      // Reset all production singletons to point at this temp root
+      resetConfig();
+      resetTimelineDb();
+      resetEntityGraphDb();
+      resetSleepDb();
+      resetEmbeddings();
+      process.env.KYBERBOT_ROOT = tempRoot;
 
-      const { processed, fullConversationText } = await ingestConversation(
-        tempRoot,
-        conv,
-        collection
-      );
-      logger.info(`  Indexed ${processed} turns into ChromaDB collection '${collectionName}'`);
+      // Re-initialize embeddings for this conversation (fresh ChromaDB collection)
+      await initializeEmbeddings();
 
-      // Phase 2: Query and score each QA item
+      // Phase 1: Ingest conversation sessions via production pipeline
       const speakerA = conv.conversation.speaker_a;
       const speakerB = conv.conversation.speaker_b;
+      const processed = await ingestConversation(tempRoot, conv, speakerA, speakerB);
+      logger.info(`  Indexed ${processed} sessions via storeConversation()`);
 
+      // Phase 1.5: Run observation extraction for better retrieval
+      try {
+        await runObserveStep(tempRoot, {
+          ...DEFAULT_CONFIG,
+          maxObservationsPerRun: 100,
+        });
+        logger.info(`  Observation extraction complete`);
+      } catch (err) {
+        logger.warn(`  Observation extraction failed (non-fatal)`, {
+          error: String(err),
+        });
+      }
+
+      // Phase 2: Query and score each QA item
       for (let i = 0; i < qaItems.length; i++) {
         const qa = qaItems[i];
         try {
           const predicted = await answerQuestion(
             tempRoot,
             qa,
-            collection,
             speakerA,
-            speakerB,
-            fullConversationText
+            speakerB
           );
           const groundTruth = getGroundTruth(qa);
           const f1 = scoreAnswer(predicted, groundTruth, qa.category);
@@ -252,12 +258,19 @@ export async function runLoCoMoBenchmark(
         `  ${sampleId}: ${convAcc.toFixed(3)} avg F1 (${conversationScores[sampleId].total} questions)`
       );
     } finally {
-      // Clean up ChromaDB collection
+      // Clean up ChromaDB collection to isolate conversations
       try {
-        await chroma.deleteCollection({ name: collectionName });
+        const chroma = new ChromaClient({ path: chromaUrl });
+        await chroma.deleteCollection({ name: 'kyberbot_data' });
       } catch {
-        logger.warn(`Failed to clean up ChromaDB collection: ${collectionName}`);
+        logger.warn(`Failed to clean up ChromaDB collection`);
       }
+
+      // Reset singletons before next conversation
+      resetTimelineDb();
+      resetEntityGraphDb();
+      resetSleepDb();
+      resetEmbeddings();
 
       // Clean up temp directory
       try {
@@ -267,6 +280,14 @@ export async function runLoCoMoBenchmark(
       }
     }
   }
+
+  // Restore original env
+  if (originalRoot) {
+    process.env.KYBERBOT_ROOT = originalRoot;
+  } else {
+    delete process.env.KYBERBOT_ROOT;
+  }
+  resetConfig();
 
   // Build results
   const byCategory: Record<number, { accuracy: number; count: number }> = {};
@@ -327,32 +348,25 @@ const CATEGORY_LABELS: Record<number, string> = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PHASE 1: INGESTION
+// PHASE 1: INGESTION (via production storeConversation)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Ingest all sessions from a LoCoMo conversation into ChromaDB (turn-level)
- * and the entity graph + timeline FTS (session-level).
- *
- * Each turn is stored as a document with ±1 turn context window for
- * better semantic retrieval. The full session transcript is also stored
- * in timeline FTS as a fallback search channel.
+ * Ingest all sessions from a LoCoMo conversation via the production
+ * storeConversation() pipeline. Each session becomes one storeConversation()
+ * call, which automatically handles:
+ * - Entity extraction via Haiku
+ * - Timeline FTS indexing
+ * - Segment-level ChromaDB indexing
+ * - Entity graph storage
  */
 async function ingestConversation(
   root: string,
   conv: LoCoMoConversation,
-  collection: any
-): Promise<{ processed: number }> {
-  const dataDir = join(root, 'data');
-  mkdirSync(dataDir, { recursive: true });
-
-  // Initialize databases for entity graph and timeline FTS
-  const timelineDb = createTimelineDb(join(dataDir, 'timeline.db'));
-  const entityDb = createEntityGraphDb(join(dataDir, 'entity-graph.db'));
-
+  speakerA: string,
+  speakerB: string
+): Promise<number> {
   const conversation = conv.conversation;
-  const speakerA = conversation.speaker_a;
-  const speakerB = conversation.speaker_b;
 
   // Find all sessions with actual turns
   const sessions: Array<{ num: number; dateTime: string; turns: Turn[] }> = [];
@@ -378,227 +392,20 @@ async function ingestConversation(
     `  Ingesting ${sessions.length} sessions for ${conv.sample_id}`
   );
 
-  const client = getClaudeClient();
-  let totalProcessed = 0;
-
-  // Build full conversation text for context-stuffing approach
-  const fullConvParts: string[] = [];
-
   for (const session of sessions) {
-    const timestamp = parseLocomoDateTime(session.dateTime);
-    const sessionDateTime = session.dateTime;
-    const sessionNum = session.num;
-
-    // Build full transcript for entity extraction, timeline FTS, and full-context QA
+    const sessionTimestamp = parseLocomoDateTime(session.dateTime);
     const transcript = buildTranscript(session.turns, speakerA, speakerB);
 
-    // Add to full conversation text with date header
-    fullConvParts.push(`DATE: ${sessionDateTime}\nCONVERSATION:\n${transcript}`);
-
-    // ── ChromaDB: turn-level indexing with ±1 context window ──
-    const batchIds: string[] = [];
-    const batchDocs: string[] = [];
-    const batchMetas: Array<Record<string, string | number>> = [];
-
-    for (const [i, turn] of session.turns.entries()) {
-      const prev = session.turns[i - 1];
-      const next = session.turns[i + 1];
-
-      let content = '';
-      if (prev?.text) content += `${prev.speaker}: ${prev.text}\n`;
-      content += `${turn.speaker}: ${turn.text || ''}`;
-      if (turn.blip_caption) content += ` [shared image: ${turn.blip_caption}]`;
-      if (next?.text) content += `\n${next.speaker}: ${next.text}`;
-
-      // Skip turns with no meaningful content
-      if (content.trim().length === 0) continue;
-
-      const turnId = `${conv.sample_id}_s${sessionNum}_t${i}`;
-
-      batchIds.push(turnId);
-      batchDocs.push(content);
-      batchMetas.push({
-        session: sessionNum,
-        date: sessionDateTime,
-        speaker: turn.speaker,
-        dia_id: turn.dia_id || '',
-        turn_index: i,
-      });
-    }
-
-    // Add to ChromaDB in batches of up to 100
-    for (let batchStart = 0; batchStart < batchIds.length; batchStart += 100) {
-      const batchEnd = Math.min(batchStart + 100, batchIds.length);
-      await collection.add({
-        ids: batchIds.slice(batchStart, batchEnd),
-        documents: batchDocs.slice(batchStart, batchEnd),
-        metadatas: batchMetas.slice(batchStart, batchEnd),
-      });
-    }
-
-    totalProcessed += batchIds.length;
-
-    // ── Entity extraction via Claude Haiku ──
-    // Truncate for entity extraction (Haiku context limit)
-    const truncated =
-      transcript.length > 4000
-        ? transcript.slice(0, 4000) + '\n[Transcript truncated...]'
-        : transcript;
-
-    let entities: Array<{ name: string; type: string }> = [];
-    let relationships: Array<{
-      source: { name: string; type: string };
-      target: { name: string; type: string };
-      relationship: string;
-      confidence: number;
-      rationale: string;
-    }> = [];
-
-    try {
-      const response = await client.complete(
-        `Extract entities and relationships from this conversation:\n\n${truncated}`,
-        {
-          model: 'haiku',
-          system: ENTITY_EXTRACTION_SYSTEM,
-          maxTokens: 1024,
-          maxTurns: 1,
-        }
-      );
-
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        entities = (parsed.entities || []).filter(
-          (e: any) => e.name && e.type && typeof e.name === 'string'
-        );
-        relationships = (parsed.relationships || []).filter(
-          (r: any) => r.source?.name && r.target?.name && r.relationship
-        );
-      }
-    } catch (err) {
-      logger.debug(
-        `  Entity extraction failed for session ${session.num}`,
-        { error: String(err) }
-      );
-    }
-
-    // ── Timeline FTS: store full session transcript (not truncated) ──
-    const sourcePath = `locomo://${conv.sample_id}/session_${session.num}`;
-    const title = `[locomo] ${speakerA} & ${speakerB} - Session ${session.num}`;
-    const entityNames = entities.map((e) => e.name);
-    const topicNames = entities
-      .filter((e) => e.type === 'topic')
-      .map((e) => e.name);
-
-    timelineDb
-      .prepare(
-        `INSERT OR REPLACE INTO timeline_events
-         (type, timestamp, title, summary, source_path, entities_json, topics_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        'conversation',
-        timestamp,
-        title,
-        transcript, // Full transcript, not truncated
-        sourcePath,
-        JSON.stringify(entityNames),
-        JSON.stringify(topicNames)
-      );
-
-    // ── Entity graph: store entities ──
-    for (const entity of entities) {
-      try {
-        const normalized = entity.name
-          .toLowerCase()
-          .trim()
-          .replace(/\s+/g, ' ');
-        const validTypes = ['person', 'company', 'project', 'place', 'topic'];
-        const entityType = validTypes.includes(entity.type)
-          ? entity.type
-          : 'topic';
-
-        const existing = entityDb
-          .prepare(
-            'SELECT id FROM entities WHERE normalized_name = ? AND type = ?'
-          )
-          .get(normalized, entityType) as { id: number } | undefined;
-
-        if (existing) {
-          entityDb
-            .prepare(
-              'UPDATE entities SET last_seen = ?, mention_count = mention_count + 1 WHERE id = ?'
-            )
-            .run(timestamp, existing.id);
-        } else {
-          entityDb
-            .prepare(
-              `INSERT INTO entities (name, normalized_name, aliases, type, first_seen, last_seen, mention_count)
-               VALUES (?, ?, '[]', ?, ?, ?, 1)`
-            )
-            .run(entity.name, normalized, entityType, timestamp, timestamp);
-        }
-      } catch {
-        // Skip duplicate or invalid entities
-      }
-    }
-
-    // ── Entity graph: store relationships ──
-    for (const rel of relationships) {
-      try {
-        const sourceNorm = rel.source.name
-          .toLowerCase()
-          .trim()
-          .replace(/\s+/g, ' ');
-        const targetNorm = rel.target.name
-          .toLowerCase()
-          .trim()
-          .replace(/\s+/g, ' ');
-
-        const sourceEntity = entityDb
-          .prepare('SELECT id FROM entities WHERE normalized_name = ?')
-          .get(sourceNorm) as { id: number } | undefined;
-        const targetEntity = entityDb
-          .prepare('SELECT id FROM entities WHERE normalized_name = ?')
-          .get(targetNorm) as { id: number } | undefined;
-
-        if (
-          sourceEntity &&
-          targetEntity &&
-          sourceEntity.id !== targetEntity.id
-        ) {
-          const [id1, id2] =
-            sourceEntity.id < targetEntity.id
-              ? [sourceEntity.id, targetEntity.id]
-              : [targetEntity.id, sourceEntity.id];
-
-          entityDb
-            .prepare(
-              `INSERT INTO entity_relations (source_id, target_id, relationship, strength, confidence, rationale)
-               VALUES (?, ?, ?, 1, ?, ?)
-               ON CONFLICT(source_id, target_id) DO UPDATE SET
-                 strength = strength + 1,
-                 confidence = MAX(entity_relations.confidence, excluded.confidence)`
-            )
-            .run(
-              id1,
-              id2,
-              rel.relationship,
-              rel.confidence || 0.7,
-              rel.rationale || ''
-            );
-        }
-      } catch {
-        // Skip invalid relationships
-      }
-    }
+    // Feed through the production pipeline
+    await storeConversation(root, {
+      prompt: `DATE: ${session.dateTime}\n${transcript}`,
+      response: '', // The transcript IS the content
+      channel: 'locomo',
+      timestamp: sessionTimestamp,
+    });
   }
 
-  timelineDb.close();
-  entityDb.close();
-
-  const fullConversationText = fullConvParts.join('\n\n');
-  return { processed: totalProcessed, fullConversationText };
+  return sessions.length;
 }
 
 /**
@@ -631,231 +438,107 @@ function buildTranscript(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PHASE 2: QUERY
+// PHASE 2: QUERY (via production hybridSearch)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Answer a single QA item using full conversation context.
- * Since LoCoMo conversations are only 15-22K tokens, we put the entire
- * conversation in the prompt for maximum recall, rather than relying
- * solely on retrieval (which misses 60%+ of relevant turns).
+ * Answer a single QA item using the production hybridSearch() for retrieval.
  */
 async function answerQuestion(
   root: string,
   qa: QAItem,
-  collection: any,
   speakerA: string,
-  speakerB: string,
-  fullConversationText: string
+  speakerB: string
 ): Promise<string> {
-  const prompt = buildPrompt(qa, fullConversationText, speakerA, speakerB);
+  // Use the real hybrid search
+  const results = await hybridSearch(qa.question, root, {
+    limit: 15,
+    tier: 'all',
+    includeRelated: true,
+  });
+
+  // Assemble context from search results
+  const contextParts: string[] = [];
+  for (const r of results) {
+    const dateLabel = r.timestamp
+      ? new Date(r.timestamp).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })
+      : 'Unknown date';
+    contextParts.push(`[${dateLabel}] ${r.content}`);
+  }
+  const context =
+    contextParts.join('\n---\n') || '(No relevant memories found)';
+
+  const prompt = buildPrompt(qa, context, speakerA, speakerB);
 
   const client = getClaudeClient();
   const answer = await client.complete(prompt, {
-    model: 'opus',
+    model: 'haiku',
     maxTokens: 100,
     maxTurns: 1,
   });
 
-  // Strip common LLM formatting artifacts
+  // Clean up answer
+  return cleanAnswer(answer);
+}
+
+/**
+ * Strip common LLM formatting artifacts and normalize numbers.
+ */
+function cleanAnswer(answer: string): string {
   let cleaned = answer
     .replace(/^#+\s*(Short\s+)?[Aa]nswer:?\s*/i, '')
     .replace(/^(Short\s+)?[Aa]nswer:?\s*/i, '')
     .replace(/\*\*/g, '')
-    .replace(/^["']|["']$/g, '')  // strip surrounding quotes
-    .replace(/\s*\(.*?\)\s*$/g, '')  // strip trailing parenthetical notes
-    .replace(/\.\s*$/, '')  // strip trailing period
+    .replace(/^["']|["']$/g, '') // strip surrounding quotes
+    .replace(/\s*\(.*?\)\s*$/g, '') // strip trailing parenthetical notes
+    .replace(/\.\s*$/, '') // strip trailing period
     .trim();
 
   // Normalize number words to digits for F1 matching
   const numberWords: Record<string, string> = {
-    'once': '1', 'twice': '2', 'thrice': '3',
-    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
-    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+    once: '1',
+    twice: '2',
+    thrice: '3',
+    one: '1',
+    two: '2',
+    three: '3',
+    four: '4',
+    five: '5',
+    six: '6',
+    seven: '7',
+    eight: '8',
+    nine: '9',
+    ten: '10',
   };
   // Only replace standalone number words
-  cleaned = cleaned.replace(/\b(once|twice|thrice|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi, (match) => {
-    return numberWords[match.toLowerCase()] || match;
-  });
+  cleaned = cleaned.replace(
+    /\b(once|twice|thrice|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi,
+    (match) => {
+      return numberWords[match.toLowerCase()] || match;
+    }
+  );
 
   return cleaned;
 }
 
 /**
- * Retrieve relevant context from ChromaDB semantic search and entity graph.
- */
-async function retrieveContext(
-  collection: any,
-  entityDb: Database.Database,
-  question: string
-): Promise<string> {
-  const contextParts: string[] = [];
-
-  // 1. ChromaDB semantic search — retrieve top 15 turn-level documents
-  try {
-    const results = await collection.query({
-      queryTexts: [question],
-      nResults: 15,
-    });
-
-    if (results.documents?.[0]) {
-      for (let i = 0; i < results.documents[0].length; i++) {
-        const meta = results.metadatas?.[0]?.[i];
-        const doc = results.documents[0][i];
-        if (doc) {
-          const sessionLabel = meta
-            ? `[Session ${meta.session}, ${meta.date}]`
-            : '[Unknown session]';
-          contextParts.push(`${sessionLabel}\n${doc}`);
-        }
-      }
-    }
-  } catch (err) {
-    logger.debug(`ChromaDB query failed, falling back to entity graph only`, {
-      error: String(err),
-    });
-  }
-
-  // 2. Entity graph search — supplementary context for relationship questions
-  const entityResults = searchEntityGraph(entityDb, question, 5);
-  for (const entity of entityResults) {
-    let line = `Entity: ${entity.name} (${entity.type})`;
-    if (entity.relationships.length > 0) {
-      const rels = entity.relationships
-        .map((r) => `${r.relationship} ${r.relatedName}`)
-        .join(', ');
-      line += ` — ${rels}`;
-    }
-    contextParts.push(line);
-  }
-
-  return contextParts.join('\n\n');
-}
-
-interface EntitySearchResult {
-  name: string;
-  type: string;
-  relationships: Array<{ relationship: string; relatedName: string }>;
-}
-
-/**
- * Search the entity graph for entities mentioned in the question.
- */
-function searchEntityGraph(
-  db: Database.Database,
-  question: string,
-  limit: number
-): EntitySearchResult[] {
-  const queryLower = question.toLowerCase();
-
-  // Find entities whose names appear in the question
-  let entities: Array<{ id: number; name: string; type: string }>;
-  try {
-    entities = db
-      .prepare(
-        `SELECT id, name, type FROM entities
-         ORDER BY mention_count DESC
-         LIMIT 100`
-      )
-      .all() as Array<{ id: number; name: string; type: string }>;
-  } catch {
-    return [];
-  }
-
-  const matched = entities.filter((e) =>
-    queryLower.includes(e.name.toLowerCase())
-  );
-
-  // If no direct name matches, try partial word matching
-  const results: EntitySearchResult[] = [];
-
-  const toSearch =
-    matched.length > 0
-      ? matched.slice(0, limit)
-      : findPartialMatches(entities, queryLower, limit);
-
-  for (const entity of toSearch) {
-    // Get relationships for this entity
-    let relationships: Array<{ relationship: string; relatedName: string }> =
-      [];
-    try {
-      const rels = db
-        .prepare(
-          `SELECT
-             er.relationship,
-             CASE WHEN er.source_id = ? THEN e2.name ELSE e1.name END as related_name
-           FROM entity_relations er
-           LEFT JOIN entities e1 ON er.source_id = e1.id
-           LEFT JOIN entities e2 ON er.target_id = e2.id
-           WHERE er.source_id = ? OR er.target_id = ?
-           ORDER BY er.strength DESC
-           LIMIT 5`
-        )
-        .all(entity.id, entity.id, entity.id) as Array<{
-        relationship: string;
-        related_name: string;
-      }>;
-
-      relationships = rels.map((r) => ({
-        relationship: r.relationship,
-        relatedName: r.related_name,
-      }));
-    } catch {
-      // Ignore relationship lookup errors
-    }
-
-    results.push({
-      name: entity.name,
-      type: entity.type,
-      relationships,
-    });
-  }
-
-  return results;
-}
-
-/**
- * Find entities with partial word overlap with the query.
- */
-function findPartialMatches(
-  entities: Array<{ id: number; name: string; type: string }>,
-  queryLower: string,
-  limit: number
-): Array<{ id: number; name: string; type: string }> {
-  const queryWords = new Set(
-    queryLower
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length >= 3)
-  );
-
-  const scored = entities.map((e) => {
-    const nameWords = e.name.toLowerCase().split(/\s+/);
-    const overlap = nameWords.filter((w) => queryWords.has(w)).length;
-    return { entity: e, overlap };
-  });
-
-  return scored
-    .filter((s) => s.overlap > 0)
-    .sort((a, b) => b.overlap - a.overlap)
-    .slice(0, limit)
-    .map((s) => s.entity);
-}
-
-/**
- * Build prompt for the QA item with full conversation context.
- * Combines the LoCoMo paper format with category-specific answer instructions.
+ * Build prompt for the QA item with retrieved context from hybridSearch.
  */
 function buildPrompt(
   qa: QAItem,
-  fullConversationText: string,
+  context: string,
   speakerA: string,
   speakerB: string
 ): string {
   const preamble =
-    `Below is a conversation between two people: ${speakerA} and ${speakerB}. ` +
-    `The conversation takes place over multiple days and the date of each conversation is written at the beginning of the conversation.\n\n` +
-    fullConversationText + '\n\n';
+    `The following are excerpts from past conversations between ${speakerA} and ${speakerB}, ` +
+    `retrieved from memory. The date of each excerpt is shown.\n\n` +
+    context +
+    '\n\n';
 
   switch (qa.category) {
     case 1: // Multi-hop
@@ -982,7 +665,7 @@ function scoreOpenDomain(prediction: string, groundTruth: string): number {
 }
 
 /**
- * Category 5 (adversarial): Binary — 1.0 if the prediction indicates
+ * Category 5 (adversarial): Binary -- 1.0 if the prediction indicates
  * the information is not available.
  */
 function scoreAdversarial(prediction: string): number {
@@ -1063,7 +746,7 @@ function f1Score(prediction: string, groundTruth: string): number {
  * Simple Porter stemmer approximation.
  *
  * Handles common English suffixes for token matching purposes.
- * This is intentionally simple — the LoCoMo benchmark only uses stemming
+ * This is intentionally simple -- the LoCoMo benchmark only uses stemming
  * to normalize surface-level morphological variation for F1 computation.
  */
 function porterStem(word: string): string {
@@ -1117,136 +800,6 @@ function porterStem(word: string): string {
   }
 
   return stem;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DATABASE SETUP
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Create and initialize a timeline SQLite database.
- * Mirrors the schema from timeline.ts but without module-level singleton caching.
- */
-function createTimelineDb(dbPath: string): Database.Database {
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS timeline_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL CHECK(type IN ('conversation', 'idea', 'file', 'transcript', 'note', 'intake')),
-      timestamp TEXT NOT NULL,
-      end_timestamp TEXT,
-      title TEXT NOT NULL,
-      summary TEXT,
-      source_path TEXT NOT NULL UNIQUE,
-      entities_json TEXT DEFAULT '[]',
-      topics_json TEXT DEFAULT '[]',
-      priority REAL DEFAULT 0.5,
-      decay_score REAL DEFAULT 0.0,
-      tier TEXT DEFAULT 'warm',
-      tags_json TEXT DEFAULT '[]',
-      last_enriched TEXT,
-      access_count INTEGER DEFAULT 0,
-      is_pinned INTEGER DEFAULT 0,
-      last_accessed TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_timeline_timestamp ON timeline_events(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_timeline_type ON timeline_events(type);
-    CREATE INDEX IF NOT EXISTS idx_timeline_source ON timeline_events(source_path);
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts USING fts5(
-      title,
-      summary,
-      entities,
-      topics,
-      content=timeline_events,
-      content_rowid=id
-    );
-
-    CREATE TRIGGER IF NOT EXISTS timeline_ai AFTER INSERT ON timeline_events BEGIN
-      INSERT INTO timeline_fts(rowid, title, summary, entities, topics)
-      VALUES (new.id, new.title, new.summary, new.entities_json, new.topics_json);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS timeline_ad AFTER DELETE ON timeline_events BEGIN
-      INSERT INTO timeline_fts(timeline_fts, rowid, title, summary, entities, topics)
-      VALUES ('delete', old.id, old.title, old.summary, old.entities_json, old.topics_json);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS timeline_au AFTER UPDATE ON timeline_events BEGIN
-      INSERT INTO timeline_fts(timeline_fts, rowid, title, summary, entities, topics)
-      VALUES ('delete', old.id, old.title, old.summary, old.entities_json, old.topics_json);
-      INSERT INTO timeline_fts(rowid, title, summary, entities, topics)
-      VALUES (new.id, new.title, new.summary, new.entities_json, new.topics_json);
-    END;
-  `);
-
-  return db;
-}
-
-/**
- * Create and initialize an entity graph SQLite database.
- * Mirrors the schema from entity-graph.ts but without module-level singleton caching.
- */
-function createEntityGraphDb(dbPath: string): Database.Database {
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS entities (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      normalized_name TEXT NOT NULL,
-      aliases TEXT DEFAULT '[]',
-      type TEXT NOT NULL CHECK(type IN ('person', 'company', 'project', 'place', 'topic')),
-      first_seen TEXT NOT NULL,
-      last_seen TEXT NOT NULL,
-      mention_count INTEGER DEFAULT 1,
-      priority REAL DEFAULT 0.5,
-      decay_score REAL DEFAULT 0.0,
-      tier TEXT DEFAULT 'warm',
-      last_accessed TEXT,
-      access_count INTEGER DEFAULT 0,
-      is_pinned INTEGER DEFAULT 0,
-      UNIQUE(normalized_name, type)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_entities_normalized ON entities(normalized_name);
-    CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
-
-    CREATE TABLE IF NOT EXISTS entity_mentions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_id INTEGER NOT NULL,
-      conversation_id TEXT NOT NULL,
-      source_path TEXT NOT NULL,
-      context TEXT,
-      timestamp TEXT NOT NULL,
-      FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_mentions_entity ON entity_mentions(entity_id);
-
-    CREATE TABLE IF NOT EXISTS entity_relations (
-      source_id INTEGER NOT NULL,
-      target_id INTEGER NOT NULL,
-      relationship TEXT DEFAULT 'co-occurred',
-      strength INTEGER DEFAULT 1,
-      confidence REAL DEFAULT 0.5,
-      method TEXT DEFAULT 'ai-extraction',
-      rationale TEXT,
-      last_verified TEXT,
-      PRIMARY KEY (source_id, target_id),
-      FOREIGN KEY (source_id) REFERENCES entities(id) ON DELETE CASCADE,
-      FOREIGN KEY (target_id) REFERENCES entities(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_relations_source ON entity_relations(source_id);
-    CREATE INDEX IF NOT EXISTS idx_relations_target ON entity_relations(target_id);
-  `);
-
-  return db;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1305,48 +858,6 @@ function parseLocomoDateTime(dt: string): string {
   const date = new Date(year, month, day, hours, minutes, 0, 0);
   return date.toISOString();
 }
-
-/**
- * Entity extraction system prompt — simplified version of the one in
- * relationship-extractor.ts, tuned for conversation transcripts.
- */
-const ENTITY_EXTRACTION_SYSTEM = `You are an entity relationship extractor. Analyze the conversation text and extract:
-
-1. **Entities**: People, companies, projects, places, and topics mentioned
-2. **Relationships**: Explicit relationships between entities
-
-## Entity Types
-- person: Individual people (e.g., "John", "Dr. Smith")
-- company: Companies, organizations (e.g., "Google")
-- project: Named projects, products, or apps
-- place: Locations (e.g., "New York", "Sweden")
-- topic: Topics, concepts, activities (e.g., "pottery", "adoption", "hiking")
-
-## Relationship Types (only use these exact values)
-- founded, works_at, invested_in, met_with, created, manages
-- partners_with, located_in, discussed, related_to, reports_to
-- uses, depends_on, part_of
-
-## Rules
-- Only extract relationships that are EXPLICITLY stated or strongly implied
-- Focus on people, places, activities, and events mentioned
-- Set confidence 0.8-0.95 for explicit statements, 0.5-0.7 for implied
-
-Respond with JSON only:
-{
-  "entities": [
-    { "name": "John Smith", "type": "person" }
-  ],
-  "relationships": [
-    {
-      "source": { "name": "John", "type": "person" },
-      "target": { "name": "Acme Corp", "type": "company" },
-      "relationship": "works_at",
-      "confidence": 0.9,
-      "rationale": "Explicitly stated"
-    }
-  ]
-}`;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // EXPORTS FOR TESTING

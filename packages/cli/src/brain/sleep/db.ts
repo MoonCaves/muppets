@@ -15,6 +15,18 @@ const logger = createLogger('sleep-db');
 let db: Database.Database | null = null;
 let currentRoot: string | null = null;
 
+/**
+ * Reset the sleep DB singleton. Closes any open connection.
+ * Used by the benchmark harness to isolate conversations.
+ */
+export function resetSleepDb(): void {
+  if (db) {
+    try { db.close(); } catch { /* ignore */ }
+  }
+  db = null;
+  currentRoot = null;
+}
+
 export function getSleepDb(root: string): Database.Database {
   if (db && currentRoot === root) return db;
 

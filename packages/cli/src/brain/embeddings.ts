@@ -140,6 +140,19 @@ export function isChromaAvailable(): boolean {
   return chromaAvailable;
 }
 
+/**
+ * Reset the embeddings singleton state so the next call to initializeEmbeddings()
+ * will re-establish connections. Used by the benchmark harness to reset between
+ * conversations after deleting the ChromaDB collection.
+ */
+export function resetEmbeddings(): void {
+  chromaClient = null;
+  openaiClient = null;
+  collection = null;
+  chromaInitialized = false;
+  chromaAvailable = false;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TEXT CHUNKING
 // ═══════════════════════════════════════════════════════════════════════════════

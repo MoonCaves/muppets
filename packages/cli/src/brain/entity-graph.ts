@@ -87,6 +87,19 @@ export interface EntityContext {
 let db: Database.Database | null = null;
 let dbPath: string | null = null;
 
+/**
+ * Reset the entity graph DB singleton. Closes any open connection so the next
+ * call to getEntityGraphDb() will open a fresh database at the new root.
+ * Used by the benchmark harness to isolate conversations.
+ */
+export function resetEntityGraphDb(): void {
+  if (db) {
+    try { db.close(); } catch { /* ignore */ }
+  }
+  db = null;
+  dbPath = null;
+}
+
 async function ensureDatabase(root: string): Promise<Database.Database> {
   if (db && dbPath) return db;
 
