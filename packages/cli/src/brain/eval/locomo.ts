@@ -652,7 +652,7 @@ async function answerQuestion(
 
   const client = getClaudeClient();
   const answer = await client.complete(prompt, {
-    model: 'sonnet',
+    model: 'opus',
     maxTokens: 100,
     maxTurns: 1,
   });
