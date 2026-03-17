@@ -1,15 +1,17 @@
 /**
  * KyberBot -- LoCoMo Long-Term Memory Benchmark
  *
- * Evaluates KyberBot's REAL production memory pipeline against the LoCoMo dataset:
- *   1. Ingest each conversation via storeConversation() (production ingestion)
- *   2. Extract observations via runObserveStep() (production fact extraction)
- *   3. Query using hybridSearch() (production retrieval)
+ * Evaluates KyberBot's memory pipeline against the LoCoMo dataset:
+ *   1. Ingest each conversation via direct DB + REST API operations
+ *   2. Extract observations via inline Haiku calls
+ *   3. Query using ChromaDB REST API + timeline FTS
  *   4. Score answers using token-level F1 with Porter stemming
  *   5. Report per-category and overall accuracy
  *
- * This benchmark tests the actual system, not a custom pipeline -- the score
- * reflects real production quality.
+ * This harness is self-contained — it avoids importing any module that
+ * transitively depends on the `chromadb` npm package (which loads a 4-8GB
+ * ONNX runtime and OOMs). Instead it talks to ChromaDB via its REST API
+ * and uses the OpenAI SDK directly for embeddings.
  *
  * Reference: https://arxiv.org/abs/2402.07375
  *
@@ -26,20 +28,323 @@ import { readFileSync, writeFileSync } from 'fs';
 import { mkdtempSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { ChromaClient } from 'chromadb';
+import OpenAI from 'openai';
 import { getClaudeClient } from '../../claude.js';
 import { createLogger } from '../../logger.js';
 import { resetConfig } from '../../config.js';
-import { storeConversation } from '../store-conversation.js';
-import { hybridSearch } from '../hybrid-search.js';
-import { initializeEmbeddings, isChromaAvailable, resetEmbeddings } from '../embeddings.js';
-import { resetTimelineDb } from '../timeline.js';
-import { resetEntityGraphDb } from '../entity-graph.js';
+import { resetTimelineDb, getTimelineDb, addConversationToTimeline } from '../timeline.js';
+import {
+  resetEntityGraphDb,
+  findOrCreateEntity,
+  addEntityMention,
+  linkEntitiesWithType,
+} from '../entity-graph.js';
 import { resetSleepDb } from '../sleep/db.js';
-import { runObserveStep } from '../sleep/steps/observe.js';
-import { DEFAULT_CONFIG } from '../sleep/config.js';
+import { randomUUID } from 'crypto';
 
 const logger = createLogger('eval');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHROMADB REST API (bypasses the `chromadb` npm package entirely)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CHROMA_URL = process.env.CHROMA_URL || 'http://localhost:8001';
+const CHROMA_TENANT = 'default_tenant';
+const CHROMA_DB = 'default_database';
+
+async function chromaCreateCollection(name: string): Promise<string> {
+  // Delete existing collection if it exists (leftover from previous failed run)
+  try { await chromaDeleteCollection(name); } catch { /* ignore */ }
+
+  const resp = await fetch(
+    `${CHROMA_URL}/api/v2/tenants/${CHROMA_TENANT}/databases/${CHROMA_DB}/collections`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, configuration: { hnsw: { space: 'cosine' } } }),
+    }
+  );
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`ChromaDB create collection failed (${resp.status}): ${text}`);
+  }
+  const data = (await resp.json()) as { id: string };
+  return data.id;
+}
+
+async function chromaDeleteCollection(name: string): Promise<void> {
+  await fetch(
+    `${CHROMA_URL}/api/v2/tenants/${CHROMA_TENANT}/databases/${CHROMA_DB}/collections/${name}`,
+    { method: 'DELETE' }
+  );
+}
+
+async function chromaAdd(
+  collectionId: string,
+  ids: string[],
+  documents: string[],
+  embeddings: number[][],
+  metadatas: Record<string, any>[]
+): Promise<void> {
+  const resp = await fetch(
+    `${CHROMA_URL}/api/v2/tenants/${CHROMA_TENANT}/databases/${CHROMA_DB}/collections/${collectionId}/add`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, documents, embeddings, metadatas }),
+    }
+  );
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`ChromaDB add failed (${resp.status}): ${text}`);
+  }
+}
+
+async function chromaQuery(
+  collectionId: string,
+  queryEmbedding: number[],
+  nResults: number
+): Promise<{
+  ids: string[][];
+  documents: string[][];
+  metadatas: any[][];
+  distances: number[][];
+}> {
+  const resp = await fetch(
+    `${CHROMA_URL}/api/v2/tenants/${CHROMA_TENANT}/databases/${CHROMA_DB}/collections/${collectionId}/query`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query_embeddings: [queryEmbedding],
+        n_results: nResults,
+        include: ['documents', 'metadatas', 'distances'],
+      }),
+    }
+  );
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`ChromaDB query failed (${resp.status}): ${text}`);
+  }
+  return (await resp.json()) as {
+    ids: string[][];
+    documents: string[][];
+    metadatas: any[][];
+    distances: number[][];
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OPENAI EMBEDDINGS (direct, no chromadb npm dependency)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function embed(texts: string[]): Promise<number[][]> {
+  // Batch in chunks of 100 (OpenAI limit is 2048 but we keep it reasonable)
+  const allEmbeddings: number[][] = [];
+  for (let i = 0; i < texts.length; i += 100) {
+    const batch = texts.slice(i, i + 100);
+    const resp = await openai.embeddings.create({
+      model: 'text-embedding-3-small',
+      input: batch,
+    });
+    for (const item of resp.data) {
+      allEmbeddings.push(item.embedding);
+    }
+  }
+  return allEmbeddings;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTITY EXTRACTION (inline, avoids importing relationship-extractor which
+// is safe but we inline for consistency — keeps all AI calls in one place)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ENTITY_EXTRACTION_PROMPT = `You are an entity relationship extractor. Analyze the conversation text and extract:
+
+1. **Entities**: People, companies, projects, places, and topics mentioned
+2. **Relationships**: Explicit relationships between entities
+
+## Entity Types
+- person: Individual people (e.g., "John", "Dr. Smith", "my brother")
+- company: Companies, organizations (e.g., "Google", "Acme Corp")
+- project: Specific named projects, products, or apps
+- place: Locations (e.g., "New York", "the office", "Thailand")
+- topic: Topics, concepts, technologies (e.g., "AI", "funding", "TypeScript")
+
+## Relationship Types (only use these exact values)
+- founded, works_at, invested_in, met_with, created, manages,
+  partners_with, located_in, discussed, related_to, reports_to,
+  uses, depends_on, part_of
+
+## Rules
+- Only extract relationships that are EXPLICITLY stated or strongly implied
+- Set confidence 0.8-0.95 for explicit statements, 0.5-0.7 for implied
+- Provide brief rationale
+
+Respond with JSON only:
+{
+  "entities": [{ "name": "...", "type": "..." }],
+  "relationships": [{
+    "source": { "name": "...", "type": "..." },
+    "target": { "name": "...", "type": "..." },
+    "relationship": "...",
+    "confidence": 0.9,
+    "rationale": "..."
+  }]
+}`;
+
+interface ExtractedEntity {
+  name: string;
+  type: string;
+}
+
+interface ExtractedRelationship {
+  source: ExtractedEntity;
+  target: ExtractedEntity;
+  relationship: string;
+  confidence: number;
+  rationale: string;
+}
+
+async function extractEntitiesAndRelationships(
+  text: string
+): Promise<{ entities: ExtractedEntity[]; relationships: ExtractedRelationship[] }> {
+  const client = getClaudeClient();
+  try {
+    const truncated = text.length > 4000 ? text.slice(0, 4000) + '\n[truncated]' : text;
+    const response = await client.complete(
+      `Extract entities and relationships from this conversation:\n\n${truncated}`,
+      { model: 'haiku', system: ENTITY_EXTRACTION_PROMPT, maxTokens: 1024, maxTurns: 1 }
+    );
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { entities: [], relationships: [] };
+    const result = JSON.parse(jsonMatch[0]);
+    return {
+      entities: (result.entities || []).filter((e: any) => e.name && e.type),
+      relationships: (result.relationships || []).filter(
+        (r: any) => r.source?.name && r.target?.name && r.relationship
+      ),
+    };
+  } catch {
+    return { entities: [], relationships: [] };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OBSERVATION EXTRACTION (inline, avoids importing observe.ts -> embeddings.ts)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const OBSERVATION_PROMPT = `Extract key facts from this conversation as a JSON array of short, self-contained statements. Each fact should be independently understandable without context.
+
+Rules:
+- Include: names, relationships, dates, places, preferences, events, decisions, feelings, plans
+- Each fact should be a single sentence, 5-20 words
+- Use specific names, not pronouns
+- Include temporal context when mentioned (dates, "last year", etc.)
+- Do NOT include greetings, small talk, or meta-commentary
+- Return 3-15 facts depending on conversation length
+
+Example output:
+["Caroline is originally from Sweden", "Melanie has two kids who like dinosaurs", "The charity race raised awareness for mental health", "Caroline wants to pursue counseling as a career"]
+
+Conversation:
+`;
+
+async function extractObservations(text: string): Promise<string[]> {
+  const client = getClaudeClient();
+  try {
+    const content = text.slice(0, 4000);
+    const response = await client.complete(OBSERVATION_PROMPT + content, {
+      model: 'haiku',
+      maxTokens: 1024,
+      maxTurns: 1,
+    });
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+    const facts = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(facts)) return [];
+    return facts.filter(
+      (f: any) => typeof f === 'string' && f.length >= 10 && f.length <= 200
+    );
+  } catch {
+    return [];
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SEGMENT SPLITTING (matches production segmentText from store-conversation.ts)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function segmentText(
+  text: string,
+  segmentSize: number = 250,
+  overlap: number = 50
+): Array<{ text: string; index: number }> {
+  if (text.length <= segmentSize) {
+    return [{ text, index: 0 }];
+  }
+
+  const segments: Array<{ text: string; index: number }> = [];
+  let start = 0;
+  let index = 0;
+
+  while (start < text.length) {
+    let end = start + segmentSize;
+
+    if (end < text.length) {
+      const slice = text.slice(start, end + 50);
+      const breakPoint = slice.lastIndexOf('\n');
+      const sentenceBreak = slice.search(/[.!?]\s+[A-Z]/);
+      if (breakPoint > segmentSize * 0.6) {
+        end = start + breakPoint + 1;
+      } else if (sentenceBreak > segmentSize * 0.6) {
+        end = start + sentenceBreak + 2;
+      }
+    } else {
+      end = text.length;
+    }
+
+    segments.push({ text: text.slice(start, end).trim(), index });
+    index++;
+    // Ensure start always advances by at least half the segment size
+    const nextStart = end - overlap;
+    start = Math.max(nextStart, start + Math.floor(segmentSize / 2));
+    if (start >= text.length) break;
+  }
+
+  return segments;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOISE ENTITY FILTERING (matches production filterNoiseEntities)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const NOISE_ENTITY_PATTERNS: RegExp[] = [
+  /^(curl|wget|bash|sh|zsh|npm|pnpm|yarn|pip|git|docker|node|python|make|gcc)$/i,
+  /^(BLOCKED|ERROR|FAIL|OK|SUCCESS|null|undefined|true|false|none|N\/A)$/i,
+  /^(max\s+turns?\s+limit|rate\s+limit|timeout|sandbox|retry|fallback|skip)$/i,
+  /^(settings|config|permissions?|terminal|shell|command|script)$/i,
+  /^(stdout|stderr|stdin|exit code|error|warning)$/i,
+  /\.(json|yaml|yml|md|ts|js|py|sh|env|toml|lock|log|txt|csv|db)$/i,
+  /^[.\/~].*\//,
+  /^\d+$/,
+  /^.{1,2}$/,
+  /^(the|this|that|it|they|we|i|you|he|she|my|our)$/i,
+  /^[a-f0-9-]{36}$/i,
+  /^(http|https|localhost|127\.0\.0\.1|0\.0\.0\.0)/i,
+];
+
+function filterNoiseEntities(
+  entities: ExtractedEntity[]
+): ExtractedEntity[] {
+  return entities.filter((e) => {
+    const name = e.name.trim();
+    if (NOISE_ENTITY_PATTERNS.some((p) => p.test(name))) return false;
+    return true;
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATA TYPES
@@ -98,7 +403,8 @@ export interface LoCoMoResult {
 }
 
 /**
- * Run the LoCoMo benchmark against KyberBot's production memory pipeline.
+ * Run the LoCoMo benchmark using direct DB + REST API operations.
+ * Does NOT import the `chromadb` npm package — avoids the 4-8GB ONNX OOM.
  */
 export async function runLoCoMoBenchmark(
   options: LoCoMoOptions
@@ -110,16 +416,18 @@ export async function runLoCoMoBenchmark(
     verbose = false,
   } = options;
 
-  // Initialize ChromaDB via production pipeline
-  await initializeEmbeddings();
-  if (!isChromaAvailable()) {
+  const categorySet = new Set(categories);
+
+  // Verify ChromaDB is reachable via REST
+  try {
+    const healthResp = await fetch(`${CHROMA_URL}/api/v2/heartbeat`);
+    if (!healthResp.ok) throw new Error(`ChromaDB health check failed: ${healthResp.status}`);
+    logger.info('ChromaDB reachable via REST API');
+  } catch (err) {
     throw new Error(
-      'ChromaDB is required for LoCoMo benchmark. Start with: docker-compose up -d'
+      `ChromaDB is required for LoCoMo benchmark. Start with: docker-compose up -d\n${err}`
     );
   }
-
-  const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8001';
-  const categorySet = new Set(categories);
 
   // Load dataset
   const raw = readFileSync(dataPath, 'utf-8');
@@ -162,31 +470,38 @@ export async function runLoCoMoBenchmark(
       'agent_name: LoCoMo Benchmark\ntimezone: UTC\nheartbeat_interval: 30m\n'
     );
 
+    // Create ChromaDB collection for this conversation
+    const chromaCollectionName = `locomo_${sampleId.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+    let chromaCollectionId: string | null = null;
+
     try {
       // Reset all production singletons to point at this temp root
       resetConfig();
       resetTimelineDb();
       resetEntityGraphDb();
       resetSleepDb();
-      resetEmbeddings();
       process.env.KYBERBOT_ROOT = tempRoot;
 
-      // Re-initialize embeddings for this conversation (fresh ChromaDB collection)
-      await initializeEmbeddings();
+      // Create ChromaDB collection via REST
+      chromaCollectionId = await chromaCreateCollection(chromaCollectionName);
+      logger.debug(`Created ChromaDB collection: ${chromaCollectionName} (${chromaCollectionId})`);
 
-      // Phase 1: Ingest conversation sessions via production pipeline
+      // Phase 1: Ingest conversation sessions
       const speakerA = conv.conversation.speaker_a;
       const speakerB = conv.conversation.speaker_b;
-      const processed = await ingestConversation(tempRoot, conv, speakerA, speakerB);
-      logger.info(`  Indexed ${processed} sessions via storeConversation()`);
+      const processed = await ingestConversation(
+        tempRoot,
+        conv,
+        speakerA,
+        speakerB,
+        chromaCollectionId
+      );
+      logger.info(`  Indexed ${processed} sessions`);
 
-      // Phase 1.5: Run observation extraction for better retrieval
+      // Phase 1.5: Run observation extraction
       try {
-        await runObserveStep(tempRoot, {
-          ...DEFAULT_CONFIG,
-          maxObservationsPerRun: 100,
-        });
-        logger.info(`  Observation extraction complete`);
+        const obsCount = await runObservations(tempRoot, chromaCollectionId);
+        logger.info(`  Extracted ${obsCount} observations`);
       } catch (err) {
         logger.warn(`  Observation extraction failed (non-fatal)`, {
           error: String(err),
@@ -201,7 +516,8 @@ export async function runLoCoMoBenchmark(
             tempRoot,
             qa,
             speakerA,
-            speakerB
+            speakerB,
+            chromaCollectionId
           );
           const groundTruth = getGroundTruth(qa);
           const f1 = scoreAnswer(predicted, groundTruth, qa.category);
@@ -258,19 +574,17 @@ export async function runLoCoMoBenchmark(
         `  ${sampleId}: ${convAcc.toFixed(3)} avg F1 (${conversationScores[sampleId].total} questions)`
       );
     } finally {
-      // Clean up ChromaDB collection to isolate conversations
+      // Clean up ChromaDB collection via REST
       try {
-        const chroma = new ChromaClient({ path: chromaUrl });
-        await chroma.deleteCollection({ name: 'kyberbot_data' });
+        await chromaDeleteCollection(chromaCollectionName);
       } catch {
-        logger.warn(`Failed to clean up ChromaDB collection`);
+        logger.warn(`Failed to clean up ChromaDB collection: ${chromaCollectionName}`);
       }
 
       // Reset singletons before next conversation
       resetTimelineDb();
       resetEntityGraphDb();
       resetSleepDb();
-      resetEmbeddings();
 
       // Clean up temp directory
       try {
@@ -348,23 +662,21 @@ const CATEGORY_LABELS: Record<number, string> = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PHASE 1: INGESTION (via production storeConversation)
+// PHASE 1: INGESTION (direct DB + ChromaDB REST API)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Ingest all sessions from a LoCoMo conversation via the production
- * storeConversation() pipeline. Each session becomes one storeConversation()
- * call, which automatically handles:
- * - Entity extraction via Haiku
- * - Timeline FTS indexing
- * - Segment-level ChromaDB indexing
- * - Entity graph storage
+ * Ingest all sessions from a LoCoMo conversation.
+ * - Segments are stored in timeline FTS (SQLite)
+ * - Segments are embedded via OpenAI and stored in ChromaDB via REST
+ * - Entities are extracted via Haiku and stored in the entity graph
  */
 async function ingestConversation(
   root: string,
   conv: LoCoMoConversation,
   speakerA: string,
-  speakerB: string
+  speakerB: string,
+  chromaCollectionId: string
 ): Promise<number> {
   const conversation = conv.conversation;
 
@@ -395,14 +707,122 @@ async function ingestConversation(
   for (const session of sessions) {
     const sessionTimestamp = parseLocomoDateTime(session.dateTime);
     const transcript = buildTranscript(session.turns, speakerA, speakerB);
+    const fullText = `DATE: ${session.dateTime}\n${transcript}`;
+    const conversationId = randomUUID();
+    const sourcePath = `channel://locomo/${conversationId}`;
 
-    // Feed through the production pipeline
-    await storeConversation(root, {
-      prompt: `DATE: ${session.dateTime}\n${transcript}`,
-      response: '', // The transcript IS the content
-      channel: 'locomo',
-      timestamp: sessionTimestamp,
-    });
+    // ── Step 1: Extract entities via Haiku ──────────────────────────────
+    let entities: ExtractedEntity[] = [];
+    let relationships: ExtractedRelationship[] = [];
+    try {
+      const extraction = await extractEntitiesAndRelationships(fullText);
+      entities = filterNoiseEntities(extraction.entities);
+      // Filter relationships to only reference kept entities
+      const entityNameSet = new Set(entities.map((e) => e.name.toLowerCase()));
+      relationships = extraction.relationships.filter(
+        (r) =>
+          entityNameSet.has(r.source.name.toLowerCase()) &&
+          entityNameSet.has(r.target.name.toLowerCase())
+      );
+    } catch {
+      // Entity extraction is best-effort
+    }
+
+    const entityNames = entities.map((e) => e.name);
+    const topicNames = entities.filter((e) => e.type === 'topic').map((e) => e.name);
+
+    // ── Step 2: Timeline (parent entry) ─────────────────────────────────
+    const title = fullText.length > 100 ? fullText.slice(0, 97) + '...' : fullText;
+    const fullTitle = `[locomo] ${title}`;
+
+    try {
+      await addConversationToTimeline(
+        root, conversationId, sourcePath, sessionTimestamp, undefined,
+        fullTitle,
+        fullText.slice(0, 2000),
+        entityNames, topicNames
+      );
+    } catch (err) {
+      logger.warn('Timeline storage failed', { error: String(err) });
+    }
+
+    // ── Step 3: Segment-level indexing ───────────────────────────────────
+    const segments = segmentText(fullText, 250, 50);
+    const segIds: string[] = [];
+    const segTexts: string[] = [];
+    const segMetadatas: Record<string, any>[] = [];
+
+    for (const seg of segments) {
+      const segPath = `${sourcePath}/seg_${seg.index}`;
+      const segId = `${conversationId}_seg_${seg.index}`;
+
+      // Store segment in timeline FTS
+      try {
+        await addConversationToTimeline(
+          root, segId, segPath, sessionTimestamp, undefined,
+          fullTitle, seg.text, entityNames, topicNames
+        );
+      } catch {
+        // Best-effort
+      }
+
+      segIds.push(segId);
+      segTexts.push(seg.text);
+      segMetadatas.push({
+        type: 'conversation',
+        source_path: segPath,
+        title: fullTitle,
+        timestamp: sessionTimestamp,
+      });
+    }
+
+    // Embed all segments in one batch and add to ChromaDB
+    if (segTexts.length > 0) {
+      try {
+        const segEmbeddings = await embed(segTexts);
+        await chromaAdd(chromaCollectionId, segIds, segTexts, segEmbeddings, segMetadatas);
+      } catch (err) {
+        logger.warn('ChromaDB segment indexing failed', { error: String(err) });
+      }
+    }
+
+    // ── Step 4: Entity graph ────────────────────────────────────────────
+    try {
+      const entityMap = new Map<string, number>();
+
+      for (const entity of entities) {
+        try {
+          const dbEntity = await findOrCreateEntity(
+            root, entity.name, entity.type as any, sessionTimestamp
+          );
+          entityMap.set(entity.name, dbEntity.id);
+          await addEntityMention(
+            root, dbEntity.id, conversationId, sourcePath,
+            fullText.slice(0, 200), sessionTimestamp
+          );
+        } catch {
+          // Best-effort
+        }
+      }
+
+      for (const rel of relationships) {
+        try {
+          const sourceId = entityMap.get(rel.source.name);
+          const targetId = entityMap.get(rel.target.name);
+          if (sourceId && targetId && sourceId !== targetId) {
+            await linkEntitiesWithType(root, sourceId, targetId, {
+              relationship: rel.relationship as any,
+              confidence: rel.confidence,
+              rationale: rel.rationale,
+            });
+          }
+        } catch {
+          // Best-effort
+        }
+      }
+    } catch {
+      // Entity graph is best-effort
+    }
   }
 
   return sessions.length;
@@ -438,37 +858,195 @@ function buildTranscript(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PHASE 2: QUERY (via production hybridSearch)
+// PHASE 1.5: OBSERVATION EXTRACTION (inline, no transitive chromadb import)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Answer a single QA item using the production hybridSearch() for retrieval.
+ * Extract observations from ingested conversations and store them in
+ * both timeline FTS and ChromaDB (via REST API).
+ */
+async function runObservations(
+  root: string,
+  chromaCollectionId: string
+): Promise<number> {
+  const timeline = await getTimelineDb(root);
+  let observationsCreated = 0;
+
+  // Find conversation events that don't have observations yet
+  const unobserved = timeline.prepare(`
+    SELECT te.id, te.source_path, te.title, te.summary, te.timestamp,
+           te.entities_json, te.topics_json
+    FROM timeline_events te
+    WHERE te.type = 'conversation'
+      AND te.summary IS NOT NULL
+      AND LENGTH(te.summary) > 50
+      AND NOT EXISTS (
+        SELECT 1 FROM timeline_events obs
+        WHERE obs.source_path LIKE 'observation://' || REPLACE(te.source_path, 'channel://', '') || '/%'
+      )
+    ORDER BY te.timestamp DESC
+    LIMIT 100
+  `).all() as Array<{
+    id: number;
+    source_path: string;
+    title: string;
+    summary: string;
+    timestamp: string;
+    entities_json: string | null;
+    topics_json: string | null;
+  }>;
+
+  if (unobserved.length === 0) return 0;
+
+  for (const event of unobserved) {
+    try {
+      const facts = await extractObservations(event.summary);
+      if (facts.length === 0) continue;
+
+      const parentId = event.source_path.replace('channel://', '');
+      const obsIds: string[] = [];
+      const obsTexts: string[] = [];
+      const obsMetadatas: Record<string, any>[] = [];
+
+      for (const [i, fact] of facts.entries()) {
+        const obsPath = `observation://${parentId}/${i}`;
+        const obsId = `obs_${parentId.replace(/[^a-zA-Z0-9]/g, '_')}_${i}`;
+
+        // Store in timeline FTS
+        try {
+          timeline.prepare(`
+            INSERT OR REPLACE INTO timeline_events
+            (type, timestamp, title, summary, source_path, entities_json, topics_json, priority, tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0.7, 'hot')
+          `).run(
+            'note',
+            event.timestamp,
+            `[observation] ${fact.slice(0, 97)}`,
+            fact,
+            obsPath,
+            event.entities_json || '[]',
+            event.topics_json || '[]'
+          );
+        } catch {
+          continue;
+        }
+
+        obsIds.push(obsId);
+        obsTexts.push(fact);
+        obsMetadatas.push({
+          type: 'note',
+          source_path: obsPath,
+          title: `[observation] ${fact.slice(0, 80)}`,
+          timestamp: event.timestamp,
+        });
+
+        observationsCreated++;
+      }
+
+      // Embed and add observations to ChromaDB in batch
+      if (obsTexts.length > 0) {
+        try {
+          const obsEmbeddings = await embed(obsTexts);
+          await chromaAdd(chromaCollectionId, obsIds, obsTexts, obsEmbeddings, obsMetadatas);
+        } catch {
+          // Embedding is best-effort
+        }
+      }
+    } catch {
+      // Per-event observation extraction is best-effort
+    }
+  }
+
+  return observationsCreated;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE 2: QUERY (ChromaDB REST API + timeline FTS)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Answer a single QA item using ChromaDB semantic search + timeline FTS.
  */
 async function answerQuestion(
   root: string,
   qa: QAItem,
   speakerA: string,
-  speakerB: string
+  speakerB: string,
+  chromaCollectionId: string
 ): Promise<string> {
-  // Use the real hybrid search
-  const results = await hybridSearch(qa.question, root, {
-    limit: 15,
-    tier: 'all',
-    includeRelated: true,
-  });
+  // Semantic search via ChromaDB REST API
+  const queryEmbeddings = await embed([qa.question]);
+  const chromaResults = await chromaQuery(chromaCollectionId, queryEmbeddings[0], 15);
 
-  // Assemble context from search results
-  const contextParts: string[] = [];
-  for (const r of results) {
-    const dateLabel = r.timestamp
-      ? new Date(r.timestamp).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-        })
-      : 'Unknown date';
-    contextParts.push(`[${dateLabel}] ${r.content}`);
+  // Timeline FTS search
+  const timeline = await getTimelineDb(root);
+  let ftsResults: Array<{ summary: string; timestamp: string }> = [];
+  try {
+    // Build FTS query: take significant words from the question
+    const ftsQuery = qa.question
+      .replace(/[^\w\s]/g, '')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !['the', 'and', 'for', 'was', 'are', 'what', 'who', 'how', 'did', 'does', 'has', 'have', 'when', 'where', 'which', 'that', 'this', 'with'].includes(w.toLowerCase()))
+      .slice(0, 5)
+      .join(' OR ');
+
+    if (ftsQuery) {
+      ftsResults = timeline.prepare(`
+        SELECT te.summary, te.timestamp
+        FROM timeline_events te
+        WHERE te.id IN (
+          SELECT rowid FROM timeline_fts WHERE timeline_fts MATCH ?
+        )
+        ORDER BY te.timestamp DESC
+        LIMIT 10
+      `).all(ftsQuery) as Array<{ summary: string; timestamp: string }>;
+    }
+  } catch {
+    // FTS is best-effort
   }
+
+  // Merge results: ChromaDB results first (semantic), then FTS results
+  const contextParts: string[] = [];
+  const seenContent = new Set<string>();
+
+  // Add ChromaDB results
+  if (chromaResults.documents && chromaResults.documents[0]) {
+    for (let i = 0; i < chromaResults.documents[0].length; i++) {
+      const doc = chromaResults.documents[0][i];
+      const meta = chromaResults.metadatas?.[0]?.[i] || {};
+      const timestamp = meta.timestamp || '';
+      const dateLabel = timestamp
+        ? new Date(timestamp).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })
+        : 'Unknown date';
+
+      const contentKey = doc?.slice(0, 100) || '';
+      if (contentKey && !seenContent.has(contentKey)) {
+        seenContent.add(contentKey);
+        contextParts.push(`[${dateLabel}] ${doc}`);
+      }
+    }
+  }
+
+  // Add FTS results that aren't already present
+  for (const ftsResult of ftsResults) {
+    const contentKey = ftsResult.summary?.slice(0, 100) || '';
+    if (contentKey && !seenContent.has(contentKey)) {
+      seenContent.add(contentKey);
+      const dateLabel = ftsResult.timestamp
+        ? new Date(ftsResult.timestamp).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })
+        : 'Unknown date';
+      contextParts.push(`[${dateLabel}] ${ftsResult.summary}`);
+    }
+  }
+
   const context =
     contextParts.join('\n---\n') || '(No relevant memories found)';
 
@@ -526,7 +1104,7 @@ function cleanAnswer(answer: string): string {
 }
 
 /**
- * Build prompt for the QA item with retrieved context from hybridSearch.
+ * Build prompt for the QA item with retrieved context.
  */
 function buildPrompt(
   qa: QAItem,
