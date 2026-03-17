@@ -164,31 +164,50 @@ export function createRunCommand(): Command {
 
         if (identity.backup?.enabled) {
           const { spawnSync } = await import('node:child_process');
+          const branch = identity.backup.branch || 'main';
+
+          // Initialize git if not already a repo
           const gitCheck = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
             cwd: root,
             stdio: 'pipe',
           });
           if (gitCheck.status !== 0) {
             logger.info('Backup configured but git not initialized — setting up...');
-            spawnSync('git', ['init'], { cwd: root, stdio: 'pipe' });
+            spawnSync('git', ['init', '-b', branch], { cwd: root, stdio: 'pipe' });
             if (identity.backup.remote_url) {
               spawnSync('git', ['remote', 'add', 'origin', identity.backup.remote_url], {
                 cwd: root,
                 stdio: 'pipe',
               });
             }
+          }
+
+          // Create initial commit if repo has no commits yet
+          const hasCommits = spawnSync('git', ['rev-parse', 'HEAD'], {
+            cwd: root,
+            stdio: 'pipe',
+          });
+          if (hasCommits.status !== 0) {
+            logger.info('Creating initial backup commit...');
+            // Ensure we're on the right branch
+            spawnSync('git', ['checkout', '-B', branch], { cwd: root, stdio: 'pipe' });
             spawnSync('git', ['add', '-A'], { cwd: root, stdio: 'pipe' });
             spawnSync('git', ['commit', '-m', 'Initial agent state'], {
               cwd: root,
               stdio: 'pipe',
             });
             if (identity.backup.remote_url) {
-              spawnSync('git', ['push', '-u', 'origin', identity.backup.branch || 'main'], {
+              const pushResult = spawnSync('git', ['push', '-u', 'origin', branch], {
                 cwd: root,
                 stdio: 'pipe',
+                encoding: 'utf-8',
               });
+              if (pushResult.status === 0) {
+                logger.info('Initial state pushed to GitHub');
+              } else {
+                logger.warn('Could not push to remote — will retry on next backup run');
+              }
             }
-            logger.info('Git backup repository initialized');
           }
         }
 
@@ -207,6 +226,18 @@ export function createRunCommand(): Command {
 
         // Display status dashboard
         const statuses = getServiceStatuses();
+
+        // Add backup status to dashboard (not a service, runs via heartbeat)
+        if (identity.backup?.enabled) {
+          statuses.push({
+            name: 'Backup',
+            status: 'running',
+            extra: `every ${identity.backup.schedule || '4h'} → ${identity.backup.remote_url || 'GitHub'}`,
+          });
+        } else {
+          statuses.push({ name: 'Backup', status: 'disabled' });
+        }
+
         displayServiceStatus(statuses);
         displayReadyMessage();
         displayConnectionInfo({

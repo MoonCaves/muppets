@@ -468,11 +468,11 @@ export function createOnboardCommand(): Command {
           console.log(chalk.yellow('\n  git is not installed. Install it first: https://git-scm.com'));
           console.log(chalk.dim('  You can set up backup later with `kyberbot backup setup`'));
         } else {
-          console.log(chalk.dim('\n  Create a private GitHub repo first, then paste the URL below.'));
-          console.log(chalk.dim('  Example: git@github.com:yourname/my-agent.git\n'));
+          console.log(chalk.dim('\n  Paste your GitHub repo URL below. Make sure you are authenticated with GitHub'));
+          console.log(chalk.dim('  (via `gh auth login`, SSH key, or git credential manager).\n'));
 
           const backupUrl = await input({
-            message: 'GitHub repo URL (SSH):',
+            message: 'GitHub repo URL:',
             default: '',
           });
 
@@ -487,24 +487,25 @@ export function createOnboardCommand(): Command {
               default: 'main',
             });
 
-            // Validate SSH access
-            console.log(chalk.dim('\n  Validating access...'));
-            const lsRemote = spawnSync('git', ['ls-remote', backupUrl.trim()], {
-              stdio: 'pipe',
-              encoding: 'utf-8',
-              timeout: 15000,
-            });
-
-            if (lsRemote.status !== 0) {
-              console.log(chalk.yellow('  Could not reach the repository.'));
-              console.log(chalk.dim(`  Error: ${(lsRemote.stderr as string || '').trim()}`));
-              console.log(chalk.dim('  The backup will be configured — fix SSH access before first run.'));
+            // Configure git authentication
+            const ghVersion = spawnSync('gh', ['--version'], { stdio: 'pipe' });
+            if (ghVersion.status === 0) {
+              const ghStatus = spawnSync('gh', ['auth', 'status'], { stdio: 'pipe' });
+              if (ghStatus.status === 0) {
+                spawnSync('gh', ['auth', 'setup-git'], { cwd: root, stdio: 'pipe' });
+                console.log(chalk.green('  Git configured to use GitHub CLI authentication.'));
+              } else {
+                console.log(chalk.yellow('  GitHub CLI found but not authenticated.'));
+                console.log(chalk.dim('  Run `gh auth login` first, then `kyberbot backup setup` to finish.\n'));
+              }
             } else {
-              console.log(chalk.green('  Repository accessible.'));
+              console.log(chalk.yellow('  GitHub CLI (gh) not found.'));
+              console.log(chalk.dim('  Install it from https://cli.github.com and run `gh auth login`,'));
+              console.log(chalk.dim('  or use an SSH URL (git@github.com:...) with SSH keys configured.\n'));
             }
 
             // Initialize git
-            spawnSync('git', ['init'], { cwd: root, stdio: 'pipe' });
+            spawnSync('git', ['init', '-b', backupBranch], { cwd: root, stdio: 'pipe' });
             spawnSync('git', ['remote', 'add', 'origin', backupUrl.trim()], { cwd: root, stdio: 'pipe' });
 
             // Rewrite .gitignore for backup mode

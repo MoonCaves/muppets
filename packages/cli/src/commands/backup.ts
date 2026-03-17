@@ -92,8 +92,8 @@ export function createBackupCommand(): Command {
       const root = getRoot();
 
       console.log(chalk.bold('\nGitHub Backup Setup\n'));
-      console.log(chalk.dim('  Back up your agent\'s memory, skills, and identity to a private GitHub repo.'));
-      console.log(chalk.dim('  Requires: git, SSH key with GitHub access, a private GitHub repo.\n'));
+      console.log(chalk.dim('  Back up your agent\'s memory, skills, and identity to a GitHub repo.'));
+      console.log(chalk.dim('  Requires: git and GitHub authentication (gh auth, SSH key, or credential manager).\n'));
 
       // Check prerequisites
       if (!hasGit()) {
@@ -103,33 +103,12 @@ export function createBackupCommand(): Command {
 
       // Collect repo URL
       const remoteUrl = await input({
-        message: 'GitHub repo URL (SSH):',
+        message: 'GitHub repo URL:',
         validate: (v: string) => {
           if (!v.trim()) return 'Repository URL is required';
-          if (!v.includes('git@') && !v.includes('https://')) return 'Use SSH (git@github.com:...) or HTTPS URL';
           return true;
         },
       });
-
-      // Validate SSH access
-      console.log(chalk.dim('\n  Validating access...'));
-      const lsRemote = spawnSync('git', ['ls-remote', remoteUrl.trim()], {
-        stdio: 'pipe',
-        encoding: 'utf-8',
-        timeout: 15000,
-      });
-
-      if (lsRemote.status !== 0) {
-        console.log(chalk.yellow('  Could not reach the repository.'));
-        console.log(chalk.dim(`  Error: ${(lsRemote.stderr || '').trim()}`));
-        const proceed = await confirm({
-          message: 'Continue anyway? (you can fix SSH access later)',
-          default: false,
-        });
-        if (!proceed) return;
-      } else {
-        console.log(chalk.green('  Repository accessible.'));
-      }
 
       // Schedule
       const schedule = await input({
@@ -143,10 +122,27 @@ export function createBackupCommand(): Command {
         default: 'main',
       });
 
+      // Configure git authentication
+      const ghVersion = spawnSync('gh', ['--version'], { stdio: 'pipe' });
+      if (ghVersion.status === 0) {
+        const ghStatus = spawnSync('gh', ['auth', 'status'], { stdio: 'pipe' });
+        if (ghStatus.status === 0) {
+          spawnSync('gh', ['auth', 'setup-git'], { stdio: 'pipe' });
+          console.log(chalk.green('  Git configured to use GitHub CLI authentication.'));
+        } else {
+          console.log(chalk.yellow('  GitHub CLI found but not authenticated.'));
+          console.log(chalk.dim('  Run `gh auth login` then re-run `kyberbot backup setup`.\n'));
+        }
+      } else {
+        console.log(chalk.yellow('  GitHub CLI (gh) not found.'));
+        console.log(chalk.dim('  Install it from https://cli.github.com and run `gh auth login`,'));
+        console.log(chalk.dim('  or use an SSH URL (git@github.com:...) with SSH keys configured.\n'));
+      }
+
       // Initialize git if needed
       if (!isGitRepo()) {
         console.log(chalk.dim('\n  Initializing git repository...'));
-        git('init');
+        git('init', '-b', branch);
         git('remote', 'add', 'origin', remoteUrl.trim());
         console.log(chalk.green('  Git initialized with remote.'));
       } else {
