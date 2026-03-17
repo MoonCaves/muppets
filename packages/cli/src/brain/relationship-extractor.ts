@@ -46,9 +46,9 @@ const EXTRACTION_PROMPT = `You are an entity relationship extractor. Analyze the
 ## Entity Types
 - person: Individual people (e.g., "John", "Dr. Smith", "my brother")
 - company: Companies, organizations (e.g., "Google", "Acme Corp", "the university")
-- project: Projects, products, apps (e.g., "the mobile app", "Project Alpha")
+- project: Specific named projects, products, or apps that someone is building or working on (e.g., "KyberBot", "Project Alpha", "the mobile app"). NOTE: Programming languages, frameworks, libraries, databases, and tools are NOT projects — classify them as topic instead.
 - place: Locations (e.g., "New York", "the office", "Thailand")
-- topic: Topics, concepts (e.g., "AI", "funding", "the meeting")
+- topic: Topics, concepts, technologies, tools, frameworks, programming languages (e.g., "AI", "funding", "TypeScript", "Docker", "React", "SQLite", "Express", "deployment")
 
 ## Relationship Types (only use these exact values)
 - founded: Person founded company/project
@@ -61,10 +61,15 @@ const EXTRACTION_PROMPT = `You are an entity relationship extractor. Analyze the
 - located_in: Company/project located in place
 - discussed: Entities discussed together (topic-related)
 - related_to: Generic relationship when specific type unclear
+- reports_to: Person reports to person (management hierarchy)
+- uses: Project/company uses a technology or tool (topic)
+- depends_on: Project depends on another project or technology
+- part_of: Entity is part of a larger entity (team part of company, module part of project)
 
 ## Rules
 - Only extract relationships that are EXPLICITLY stated or strongly implied
 - Do NOT create relationships just because entities appear together
+- Do NOT extract shell commands (curl, bash, git), file paths (.claude/settings.json), error messages (BLOCKED, timeout), or infrastructure noise (sandbox, permissions, max turns limit) as entities
 - The speaker is "user" unless otherwise specified
 - Set confidence 0.8-0.95 for explicit statements, 0.5-0.7 for implied relationships
 - Provide brief rationale explaining why you identified each relationship
@@ -175,6 +180,10 @@ function isValidRelationshipType(type: string): type is RelationshipType {
     'located_in',
     'discussed',
     'related_to',
+    'reports_to',
+    'uses',
+    'depends_on',
+    'part_of',
   ].includes(type);
 }
 
@@ -198,6 +207,10 @@ export function formatRelationship(
     discussed: { outgoing: 'discussed', incoming: 'was discussed with' },
     related_to: { outgoing: 'related to', incoming: 'related to' },
     'co-occurred': { outgoing: 'mentioned with', incoming: 'mentioned with' },
+    reports_to: { outgoing: 'reports to', incoming: 'has report' },
+    uses: { outgoing: 'uses', incoming: 'is used by' },
+    depends_on: { outgoing: 'depends on', incoming: 'is dependency of' },
+    part_of: { outgoing: 'is part of', incoming: 'contains' },
   };
 
   const format = formats[relationship] || formats['related_to'];

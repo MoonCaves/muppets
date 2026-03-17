@@ -62,4 +62,7 @@ export interface IdentityConfig {
     mode: 'subscription' | 'sdk';
     model?: string;
   };
+  memory?: {
+    entity_stoplist?: string[];
+  };
 }

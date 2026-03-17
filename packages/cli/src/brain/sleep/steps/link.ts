@@ -18,7 +18,53 @@ const logger = createLogger('sleep:link');
 
 export interface LinkResult {
   count: number;
+  processed: number;
   errors?: string[];
+}
+
+function safeParseArray(json: string | null): string[] {
+  if (!json) return [];
+  try { return JSON.parse(json); } catch { return []; }
+}
+
+/**
+ * Determine the semantic relation type between two timeline items
+ * based on shared context.
+ */
+function determineRelationType(
+  item: { source_path: string; title: string; entities_json: string | null },
+  other: { source_path: string; title: string; entities_json: string | null },
+  sharedTags: Set<string>
+): string {
+  const itemEntities = safeParseArray(item.entities_json);
+  const otherEntities = safeParseArray(other.entities_json);
+
+  // Check for shared person/company entities
+  if (itemEntities.length > 0 && otherEntities.length > 0) {
+    const shared = itemEntities.filter(e =>
+      otherEntities.some(o => o.toLowerCase() === e.toLowerCase())
+    );
+    if (shared.length > 0) return 'same_person';
+  }
+
+  // Check for continuation (same channel)
+  const itemChannel = item.source_path.match(/^channel:\/\/(\w+)\//)?.[1];
+  const otherChannel = other.source_path.match(/^channel:\/\/(\w+)\//)?.[1];
+  if (itemChannel && itemChannel === otherChannel) return 'continuation';
+
+  // Check for topic overlap (>= 2 shared content tags)
+  if (sharedTags.size >= 2) return 'same_topic';
+
+  // Check for reference (one title contains the other)
+  const itemTitle = item.title.replace(/^\[.*?\]\s*/, '').toLowerCase();
+  const otherTitle = other.title.replace(/^\[.*?\]\s*/, '').toLowerCase();
+  if (itemTitle.length >= 4 && otherTitle.length >= 4) {
+    if (itemTitle.includes(otherTitle) || otherTitle.includes(itemTitle)) {
+      return 'referenced';
+    }
+  }
+
+  return 'related';
 }
 
 export async function runLinkStep(
@@ -56,7 +102,13 @@ export async function runLinkStep(
 
     if (items.length < 2) {
       logger.debug('Not enough items with tags for linking');
-      return { count: 0 };
+      return { count: 0, processed: 0 };
+    }
+
+    // Build lookup map from source_path to item data (for determineRelationType)
+    const itemLookup = new Map<string, { source_path: string; title: string; entities_json: string | null }>();
+    for (const item of items) {
+      itemLookup.set(item.source_path, { source_path: item.source_path, title: item.title, entities_json: item.entities_json });
     }
 
     // Parse tags for each item (excluding metadata tags)
@@ -163,13 +215,20 @@ export async function runLinkStep(
         if (confidence >= config.minConfidenceForLink) {
           const sharedTagsList = [...sharedTags];
 
+          // Determine semantic relation type
+          const otherItem = itemLookup.get(otherPath);
+          const relation = otherItem
+            ? determineRelationType(item, otherItem, sharedTags)
+            : 'related';
+
           sleep.prepare(`
             INSERT INTO memory_edges
             (from_path, to_path, relation, confidence, shared_tags, rationale, method, created_at, last_verified)
-            VALUES (?, ?, 'related', ?, ?, ?, 'sleep-agent', datetime('now'), datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, 'sleep-agent', datetime('now'), datetime('now'))
           `).run(
             item.source_path,
             otherPath,
+            relation,
             confidence,
             JSON.stringify(sharedTagsList),
             `Jaccard: ${(jaccardSimilarity(tags, otherTags) * 100).toFixed(1)}% + boosts on: ${sharedTagsList.slice(0, 5).join(', ')}${sharedTagsList.length > 5 ? '...' : ''}`
@@ -190,5 +249,5 @@ export async function runLinkStep(
     errors.push(`Link step failed: ${error}`);
   }
 
-  return { count: created, errors: errors.length > 0 ? errors : undefined };
+  return { count: created, processed: created, errors: errors.length > 0 ? errors : undefined };
 }

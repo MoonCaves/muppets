@@ -24,6 +24,7 @@ export interface EntityHygieneResult {
   merged: number;
   pruned: number;
   assessed: number;
+  processed: number;
   errors?: string[];
 }
 
@@ -57,6 +58,19 @@ const ARTIFACT_PATTERNS = [
   /^person\s*\d+$/i,
   /^user$/i,
   /^narrator$/i,
+  // Shell commands and CLI tools
+  /^(curl|wget|bash|sh|zsh|npm|pnpm|yarn|pip|git|docker|node|python|make|gcc)$/i,
+  // File paths and extensions
+  /^[.\/~].*\//,
+  /\.(json|yaml|yml|md|ts|js|py|sh|env|toml|lock|log|txt|csv|db)$/i,
+  // Error states and operational terms
+  /^(BLOCKED|ERROR|FAIL|OK|SUCCESS|null|undefined|true|false|none|N\/A)$/i,
+  /^(max\s+turns?\s+limit|rate\s+limit|timeout|sandbox|retry|fallback)$/i,
+  /^(settings|config|permissions?|terminal|shell|command|script)$/i,
+  /^(stdout|stderr|stdin|exit code|error|warning)$/i,
+  // Bare numbers and very short
+  /^\d+$/,
+  /^.{1,2}$/,
 ];
 
 // Suffixes to strip for variant matching
@@ -128,7 +142,7 @@ export async function runEntityHygieneStep(
   config: SleepConfig
 ): Promise<EntityHygieneResult> {
   if (!config.enableEntityHygiene) {
-    return { count: 0, artifactsCleaned: 0, merged: 0, pruned: 0, assessed: 0 };
+    return { count: 0, artifactsCleaned: 0, merged: 0, pruned: 0, assessed: 0, processed: 0 };
   }
 
   const errors: string[] = [];
@@ -276,6 +290,7 @@ function buildResult(
   artifactsCleaned: number, merged: number, pruned: number, assessed: number, errors: string[]
 ): EntityHygieneResult {
   const count = artifactsCleaned + merged + pruned;
+  const processed = artifactsCleaned + merged + pruned + assessed;
   logger.info('Entity hygiene completed', { artifactsCleaned, merged, pruned, assessed, count });
   return {
     count,
@@ -283,6 +298,7 @@ function buildResult(
     merged,
     pruned,
     assessed,
+    processed,
     errors: errors.length > 0 ? errors : undefined,
   };
 }
@@ -413,6 +429,26 @@ function detectVariantMatch(nameA: string, nameB: string, typeA: string, typeB: 
     // Prefix match: "nick" matches first name starting with "nick" (>=3 chars)
     if (aIsSingle && a.length >= 3 && bFirst.startsWith(a)) return 'variant-first-name';
     if (bIsSingle && b.length >= 3 && aFirst.startsWith(b)) return 'variant-first-name';
+  }
+
+  // Substring variant detection (all entity types):
+  // If names share a substring >= 4 chars and the shorter name is >= 40% of the longer name's length
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  if (shorter.length >= 4 && longer.includes(shorter) && shorter.length >= longer.length * 0.4) {
+    return 'variant-substring';
+  }
+
+  // Compound variant detection (all entity types):
+  // Normalize by removing dashes, underscores, and spaces, then check prefix
+  const aNorm = a.replace(/[-_\s]/g, '');
+  const bNorm = b.replace(/[-_\s]/g, '');
+  if (aNorm.length >= 4 && bNorm.length >= 4 && aNorm !== bNorm) {
+    const shorterNorm = aNorm.length <= bNorm.length ? aNorm : bNorm;
+    const longerNorm = aNorm.length <= bNorm.length ? bNorm : aNorm;
+    if (longerNorm.startsWith(shorterNorm)) {
+      return 'variant-compound';
+    }
   }
 
   return null;

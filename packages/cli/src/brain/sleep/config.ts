@@ -37,6 +37,10 @@ export interface SleepConfig {
   maxMergesPerRun: number;
   hygieneConfidenceThreshold: number;
   pruneMinAgeDays: number;
+
+  enableConsolidation: boolean;
+  consolidationTitleThreshold: number;
+  repetitiveDecayMultiplier: number;
 }
 
 export const DEFAULT_CONFIG: SleepConfig = {
@@ -48,7 +52,7 @@ export const DEFAULT_CONFIG: SleepConfig = {
   maxLinksPerRun: 100,
   maxSummariesPerRun: 10,
 
-  decayRatePerHour: 0.0003,
+  decayRatePerHour: 0.002,
   maxDecay: 1.0,
 
   minConfidenceForLink: 0.15,
@@ -74,4 +78,8 @@ export const DEFAULT_CONFIG: SleepConfig = {
   maxMergesPerRun: 10,
   hygieneConfidenceThreshold: 0.8,
   pruneMinAgeDays: 30,
+
+  enableConsolidation: true,
+  consolidationTitleThreshold: 3,
+  repetitiveDecayMultiplier: 3.0,
 };

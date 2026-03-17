@@ -12,17 +12,60 @@
 
 import { randomUUID } from 'crypto';
 import { createLogger } from '../logger.js';
-import { addConversationToTimeline } from './timeline.js';
+import { addConversationToTimeline, findRecentDuplicate, incrementTimelineEventCount } from './timeline.js';
 import {
   findOrCreateEntity,
   addEntityMention,
   linkEntitiesWithType,
-  linkEntities,
 } from './entity-graph.js';
 import { extractRelationships } from './relationship-extractor.js';
 import { indexDocument, isChromaAvailable } from './embeddings.js';
 
 const logger = createLogger('brain');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOISE ENTITY FILTERING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const NOISE_ENTITY_PATTERNS: RegExp[] = [
+  /^(curl|wget|bash|sh|zsh|npm|pnpm|yarn|pip|git|docker|node|python|make|gcc)$/i,
+  /^(BLOCKED|ERROR|FAIL|OK|SUCCESS|null|undefined|true|false|none|N\/A)$/i,
+  /^(max\s+turns?\s+limit|rate\s+limit|timeout|sandbox|retry|fallback|skip)$/i,
+  /^(settings|config|permissions?|terminal|shell|command|script)$/i,
+  /^(stdout|stderr|stdin|exit code|error|warning)$/i,
+  /\.(json|yaml|yml|md|ts|js|py|sh|env|toml|lock|log|txt|csv|db)$/i,
+  /^[.\/~].*\//,       // file paths
+  /^\d+$/,              // bare numbers
+  /^.{1,2}$/,           // single/double char
+  /^(the|this|that|it|they|we|i|you|he|she|my|our)$/i,  // pronouns
+  /^[a-f0-9-]{36}$/i,  // UUIDs
+  /^(http|https|localhost|127\.0\.0\.1|0\.0\.0\.0)/i,    // URLs/hosts
+];
+
+/**
+ * Filter noise entities from extraction results.
+ * Uses built-in patterns plus optional agent-specific stoplist.
+ */
+export function filterNoiseEntities(
+  entities: Array<{ name: string; type: string }>,
+  agentStoplist: string[] = []
+): Array<{ name: string; type: string }> {
+  const stopSet = new Set(agentStoplist.map((s) => s.toLowerCase()));
+
+  return entities.filter((e) => {
+    const name = e.name.trim();
+    const lower = name.toLowerCase();
+
+    if (stopSet.has(lower)) return false;
+    if (NOISE_ENTITY_PATTERNS.some((p) => p.test(name))) return false;
+
+    return true;
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export interface ConversationInput {
   prompt: string;
@@ -32,13 +75,18 @@ export interface ConversationInput {
   metadata?: Record<string, unknown>;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
  * Store a conversation across all memory subsystems.
  * Call fire-and-forget — never throws, logs all errors internally.
  */
 export async function storeConversation(
   root: string,
-  input: ConversationInput
+  input: ConversationInput,
+  options: { entityStoplist?: string[] } = {}
 ): Promise<void> {
   const conversationId = randomUUID();
   const timestamp = input.timestamp || new Date().toISOString();
@@ -74,6 +122,25 @@ export async function storeConversation(
     logger.warn('Entity extraction failed', { error: String(err) });
   }
 
+  // ── Step 1b: Filter noise entities ────────────────────────────────────
+  const preFilterCount = entities.length;
+  entities = filterNoiseEntities(entities, options.entityStoplist);
+  if (entities.length < preFilterCount) {
+    logger.debug('Filtered noise entities', {
+      before: preFilterCount,
+      after: entities.length,
+      removed: preFilterCount - entities.length,
+    });
+  }
+
+  // Also filter relationships referencing removed entities
+  const entityNameSet = new Set(entities.map((e) => e.name.toLowerCase()));
+  relationships = relationships.filter(
+    (r) =>
+      entityNameSet.has(r.source.name.toLowerCase()) &&
+      entityNameSet.has(r.target.name.toLowerCase())
+  );
+
   const entityNames = entities.map((e) => e.name);
   const topicNames = entities
     .filter((e) => e.type === 'topic')
@@ -85,19 +152,32 @@ export async function storeConversation(
       ? input.prompt.slice(0, 97) + '...'
       : input.prompt;
 
-    await addConversationToTimeline(
-      root,
-      conversationId,
-      sourcePath,
-      timestamp,
-      undefined,
-      `[${input.channel}] ${title}`,
-      input.response.length > 500
-        ? input.response.slice(0, 497) + '...'
-        : input.response,
-      entityNames,
-      topicNames
-    );
+    const fullTitle = `[${input.channel}] ${title}`;
+
+    // Deduplicate heartbeat/repetitive content
+    if (input.channel === 'heartbeat') {
+      const existing = await findRecentDuplicate(root, fullTitle, 24);
+      if (existing) {
+        await incrementTimelineEventCount(root, existing.id);
+        logger.debug('Deduplicated heartbeat timeline entry', { title: fullTitle });
+        // Skip creating new timeline entry but continue to entity graph + embeddings
+      } else {
+        await addConversationToTimeline(
+          root, conversationId, sourcePath, timestamp, undefined,
+          fullTitle,
+          input.response.length > 500 ? input.response.slice(0, 497) + '...' : input.response,
+          entityNames, topicNames
+        );
+      }
+    } else {
+      await addConversationToTimeline(
+        root, conversationId, sourcePath, timestamp, undefined,
+        fullTitle,
+        input.response.length > 500 ? input.response.slice(0, 497) + '...' : input.response,
+        entityNames, topicNames
+      );
+    }
+
     logger.debug('Stored conversation in timeline', { conversationId });
   } catch (err) {
     logger.warn('Timeline storage failed', { error: String(err) });
@@ -131,7 +211,7 @@ export async function storeConversation(
       }
     }
 
-    // Link entities with typed relationships from extraction
+    // Link entities with typed relationships from extraction only
     for (const rel of relationships) {
       try {
         const sourceId = entityMap.get(rel.source.name);
@@ -148,17 +228,9 @@ export async function storeConversation(
       }
     }
 
-    // Co-occur all entities that appeared together
-    const entityIds = [...entityMap.values()];
-    for (let i = 0; i < entityIds.length; i++) {
-      for (let j = i + 1; j < entityIds.length; j++) {
-        try {
-          await linkEntities(root, entityIds[i], entityIds[j]);
-        } catch (err) {
-          // Silently skip co-occurrence failures
-        }
-      }
-    }
+    // NOTE: Co-occurrence links removed — they polluted the graph with O(n²)
+    // meaningless relationships. The sleep agent's link step now discovers
+    // meaningful edges via tag/entity overlap analysis.
 
     logger.debug('Stored entities in graph', {
       entities: entityMap.size,

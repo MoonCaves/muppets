@@ -54,7 +54,11 @@ export type RelationshipType =
   | 'partners_with'
   | 'located_in'
   | 'discussed'
-  | 'related_to';
+  | 'related_to'
+  | 'reports_to'
+  | 'uses'
+  | 'depends_on'
+  | 'part_of';
 
 export interface EntityRelation {
   source_id: number;
@@ -634,11 +638,9 @@ export async function linkEntitiesFromConversation(
     entityIds.push(dbEntity.id);
   }
 
-  for (let i = 0; i < entityIds.length; i++) {
-    for (let j = i + 1; j < entityIds.length; j++) {
-      await linkEntities(root, entityIds[i], entityIds[j]);
-    }
-  }
+  // NOTE: Co-occurrence links removed — they polluted the graph with O(n²)
+  // meaningless relationships. The sleep agent's link step discovers
+  // meaningful edges via tag/entity overlap analysis.
 
   logger.info(`Linked ${entities.length} entities from conversation`, {
     conversationId,

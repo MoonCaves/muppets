@@ -378,6 +378,59 @@ export async function getEventByPath(root: string, sourcePath: string): Promise<
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DEDUPLICATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Find a recent timeline event with a matching title within the given time window.
+ * Used to deduplicate repetitive entries (e.g., heartbeat task executions).
+ */
+export async function findRecentDuplicate(
+  root: string,
+  title: string,
+  withinHours: number
+): Promise<{ id: number; title: string } | null> {
+  const database = await ensureDatabase(root);
+  const cutoff = new Date(Date.now() - withinHours * 60 * 60 * 1000).toISOString();
+
+  // Normalize: strip channel prefix and truncation suffix for comparison
+  const normalized = title.replace(/^\[.*?\]\s*/, '').replace(/\.{3}$/, '').trim().toLowerCase();
+
+  const rows = database.prepare(`
+    SELECT id, title FROM timeline_events
+    WHERE timestamp >= ?
+    ORDER BY timestamp DESC
+    LIMIT 100
+  `).all(cutoff) as Array<{ id: number; title: string }>;
+
+  for (const row of rows) {
+    const rowNorm = row.title.replace(/^\[.*?\]\s*/, '').replace(/\.{3}$/, '').trim().toLowerCase();
+    if (rowNorm === normalized) {
+      return row;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Increment the access count and update last_accessed on a timeline event.
+ * Used when deduplicating repeated entries.
+ */
+export async function incrementTimelineEventCount(
+  root: string,
+  eventId: number
+): Promise<void> {
+  const database = await ensureDatabase(root);
+  database.prepare(`
+    UPDATE timeline_events
+    SET access_count = COALESCE(access_count, 0) + 1,
+        last_accessed = datetime('now')
+    WHERE id = ?
+  `).run(eventId);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // STATS
 // ═══════════════════════════════════════════════════════════════════════════════
 

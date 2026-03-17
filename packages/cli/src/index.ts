@@ -20,6 +20,7 @@
  *   kyberbot tunnel        # Manage ngrok tunnel (setup, start, status)
  *   kyberbot status        # Service health dashboard
  *   kyberbot update        # Update CLI source and refresh agent templates
+ *   kyberbot eval          # Evaluate memory system quality
  */
 
 import { config as loadEnv } from 'dotenv';
@@ -53,6 +54,8 @@ import { createKybernesisCommand } from './commands/kybernesis.js';
 import { createTokenCommand } from './commands/token.js';
 import { createTunnelCommand } from './commands/tunnel.js';
 import { createBackupCommand } from './commands/backup.js';
+import { createEvalCommand } from './commands/eval.js';
+import { createPinCommand, createUnpinCommand, createPinnedCommand } from './commands/pin.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VERSION
@@ -105,6 +108,10 @@ program.addCommand(createKybernesisCommand());
 program.addCommand(createTokenCommand());
 program.addCommand(createTunnelCommand());
 program.addCommand(createBackupCommand());
+program.addCommand(createEvalCommand());
+program.addCommand(createPinCommand());
+program.addCommand(createUnpinCommand());
+program.addCommand(createPinnedCommand());
 
 // When no subcommand is given, `run` executes as the default (isDefault: true).
 

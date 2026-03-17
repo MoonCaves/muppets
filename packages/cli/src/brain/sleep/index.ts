@@ -21,6 +21,7 @@ import { runLinkStep, LinkResult } from './steps/link.js';
 import { runTierStep, TierResult } from './steps/tier.js';
 import { runSummarizeStep, SummarizeResult } from './steps/summarize.js';
 import { runEntityHygieneStep, EntityHygieneResult } from './steps/entity-hygiene.js';
+import { runConsolidateStep, ConsolidateResult } from './steps/consolidate.js';
 import { saveCheckpoint } from './utils/checkpoint.js';
 
 const logger = createLogger('sleep-agent');
@@ -28,6 +29,7 @@ const logger = createLogger('sleep-agent');
 export interface RunMetrics {
   decay: DecayResult & { durationMs: number };
   tag: TagResult & { durationMs: number };
+  consolidate?: ConsolidateResult & { durationMs: number };
   link: LinkResult & { durationMs: number };
   tier: TierResult & { durationMs: number };
   summarize: SummarizeResult & { durationMs: number };
@@ -83,6 +85,14 @@ export async function startSleepAgent(
       recordTelemetry(db, runId, 'tag', metrics.tag);
       logger.info('Tag step completed', { runId, ...metrics.tag });
 
+      // Step 2.5: Consolidate (merge repeated timeline entries)
+      saveCheckpoint(db, runId, 'consolidate');
+      const consolidateStart = Date.now();
+      const consolidateResult = await runConsolidateStep(root, cfg);
+      metrics.consolidate = { ...consolidateResult, durationMs: Date.now() - consolidateStart };
+      recordTelemetry(db, runId, 'consolidate', metrics.consolidate);
+      logger.info('Consolidate step completed', { runId, ...metrics.consolidate });
+
       // Step 3: Link
       saveCheckpoint(db, runId, 'link');
       const linkStart = Date.now();
@@ -132,6 +142,7 @@ export async function startSleepAgent(
         totalDurationMs: totalDuration,
         decay: metrics.decay?.count,
         tag: metrics.tag?.count,
+        consolidate: metrics.consolidate?.count,
         link: metrics.link?.count,
         tier: metrics.tier?.count,
         summarize: metrics.summarize?.count,
@@ -211,6 +222,12 @@ export async function runSleepCycleNow(root: string, config: Partial<SleepConfig
     const tag = { ...tagResult, durationMs: Date.now() - tagStart };
     recordTelemetry(db, runId, 'tag', tag);
 
+    saveCheckpoint(db, runId, 'consolidate');
+    const consolidateStart = Date.now();
+    const consolidateResult = await runConsolidateStep(root, cfg);
+    const consolidate = { ...consolidateResult, durationMs: Date.now() - consolidateStart };
+    recordTelemetry(db, runId, 'consolidate', consolidate);
+
     saveCheckpoint(db, runId, 'link');
     const linkStart = Date.now();
     const linkResult = await runLinkStep(root, cfg);
@@ -236,7 +253,7 @@ export async function runSleepCycleNow(root: string, config: Partial<SleepConfig
     recordTelemetry(db, runId, 'entity-hygiene', entityHygiene);
 
     const totalDurationMs = Date.now() - startTime;
-    const metrics: RunMetrics = { decay, tag, link, tier, summarize, entityHygiene, totalDurationMs };
+    const metrics: RunMetrics = { decay, tag, consolidate, link, tier, summarize, entityHygiene, totalDurationMs };
 
     db.prepare(`
       UPDATE sleep_runs
@@ -267,9 +284,13 @@ function recordTelemetry(
   db: import('better-sqlite3').Database,
   runId: number,
   step: string,
-  result: { count: number; durationMs: number; errors?: string[] }
+  result: { count: number; processed?: number; durationMs: number; errors?: string[] }
 ): void {
   try {
+    const metadata: Record<string, unknown> = { count: result.count };
+    if (result.processed !== undefined) metadata.processed = result.processed;
+    if (result.errors) metadata.errors = result.errors;
+
     db.prepare(`
       INSERT INTO sleep_telemetry (run_id, step, event_type, count, duration_ms, metadata)
       VALUES (?, ?, 'step_completed', ?, ?, ?)
@@ -278,7 +299,7 @@ function recordTelemetry(
       step,
       result.count,
       result.durationMs,
-      result.errors ? JSON.stringify({ errors: result.errors }) : null
+      JSON.stringify(metadata)
     );
   } catch {
     // Don't let telemetry failures break the cycle
