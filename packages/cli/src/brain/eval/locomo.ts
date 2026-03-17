@@ -653,17 +653,32 @@ async function answerQuestion(
   const client = getClaudeClient();
   const answer = await client.complete(prompt, {
     model: 'sonnet',
-    maxTokens: 150,
+    maxTokens: 100,
     maxTurns: 1,
   });
 
   // Strip common LLM formatting artifacts
-  return answer
+  let cleaned = answer
     .replace(/^#+\s*(Short\s+)?[Aa]nswer:?\s*/i, '')
     .replace(/^(Short\s+)?[Aa]nswer:?\s*/i, '')
-    .replace(/^\*\*/g, '')
-    .replace(/\*\*$/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/^["']|["']$/g, '')  // strip surrounding quotes
+    .replace(/\s*\(.*?\)\s*$/g, '')  // strip trailing parenthetical notes
+    .replace(/\.\s*$/, '')  // strip trailing period
     .trim();
+
+  // Normalize number words to digits for F1 matching
+  const numberWords: Record<string, string> = {
+    'once': '1', 'twice': '2', 'thrice': '3',
+    'one': '1', 'two': '2', 'three': '3', 'four': '4', 'five': '5',
+    'six': '6', 'seven': '7', 'eight': '8', 'nine': '9', 'ten': '10',
+  };
+  // Only replace standalone number words
+  cleaned = cleaned.replace(/\b(once|twice|thrice|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi, (match) => {
+    return numberWords[match.toLowerCase()] || match;
+  });
+
+  return cleaned;
 }
 
 /**
@@ -828,10 +843,8 @@ function findPartialMatches(
 }
 
 /**
- * Build a category-specific prompt for the QA item with full conversation context.
- *
- * Uses the LoCoMo paper's recommended format: full conversation with dated sessions,
- * followed by a question-specific instruction.
+ * Build prompt for the QA item with full conversation context.
+ * Combines the LoCoMo paper format with category-specific answer instructions.
  */
 function buildPrompt(
   qa: QAItem,
@@ -844,57 +857,62 @@ function buildPrompt(
     `The conversation takes place over multiple days and the date of each conversation is written at the beginning of the conversation.\n\n` +
     fullConversationText + '\n\n';
 
-  const baseInstruction =
-    'Based on the above conversation, write an answer in the form of a short phrase for the following question. ' +
-    'Answer with exact words from the conversation whenever possible. Do NOT include any preamble, explanation, or formatting — just the answer.\n\n';
-
   switch (qa.category) {
-    case 1: // Multi-hop (32 questions in conv-26)
+    case 1: // Multi-hop
       return (
         preamble +
-        baseInstruction +
-        `Question: ${qa.question}\nAnswer:`
+        'Based on the above context, write an answer in the form of a short phrase for the following question. ' +
+        'Answer with exact words from the context whenever possible. ' +
+        'If the question asks for a list, include ONLY items explicitly mentioned, separated by commas. ' +
+        'Use digits for numbers (e.g., "2" not "two"). No explanations.\n\n' +
+        `Question: ${qa.question}\nShort answer:`
       );
 
     case 2: // Temporal
       return (
         preamble +
-        'Based on the above conversation, write an answer in the form of a short phrase for the following question. ' +
-        'Use the DATE of the CONVERSATION to answer with an approximate date. ' +
-        'Do NOT include any preamble or formatting — just the date.\n\n' +
-        `Question: ${qa.question}\nAnswer:`
+        'Based on the above context, write an answer in the form of a short phrase for the following question. ' +
+        'Use DATE of CONVERSATION to answer with an approximate date. ' +
+        'IMPORTANT: When someone says "last year" in a 2023 conversation, the answer is 2022. ' +
+        'When someone says "yesterday" in a session dated "15 May 2023", the answer involves 14 May 2023. ' +
+        'Give just the date or time period, no explanation.\n\n' +
+        `Question: ${qa.question}\nShort answer:`
       );
 
     case 3: // Open-domain
       return (
         preamble +
-        baseInstruction +
-        `Question: ${qa.question}\nAnswer:`
+        'Based on the above context, write an answer in the form of a short phrase for the following question. ' +
+        'If yes/no: start with "Yes" or "Likely no" then a brief reason. ' +
+        'For traits/personality: list 2-4 adjectives. Keep answer under 10 words.\n\n' +
+        `Question: ${qa.question}\nShort answer:`
       );
 
-    case 4: // Single-hop (70 questions in conv-26)
+    case 4: // Single-hop
       return (
         preamble +
-        baseInstruction +
-        `Question: ${qa.question}\nAnswer:`
+        'Based on the above context, write an answer in the form of a short phrase for the following question. ' +
+        'Answer with exact words from the context whenever possible. ' +
+        'Use digits for numbers. No explanations, just the answer.\n\n' +
+        `Question: ${qa.question}\nShort answer:`
       );
 
     case 5: // Adversarial
       return (
         preamble +
-        'Based on the above conversation, answer the following question. ' +
-        'IMPORTANT: Pay close attention to WHICH person the question asks about. ' +
-        'If the information about THAT SPECIFIC PERSON is not mentioned in the conversation, ' +
-        'respond with exactly "Not mentioned in the conversation". ' +
-        'Do NOT use information about one person to answer a question about a different person.\n\n' +
-        `Question: ${qa.question}\nAnswer:`
+        'Based on the above context, answer the following question.\n' +
+        `IMPORTANT: The question asks about a SPECIFIC person. ${speakerA} and ${speakerB} are different people. ` +
+        'If the information asked about belongs to the OTHER person or is not mentioned at all, ' +
+        'answer with "Not mentioned in the conversation".\n\n' +
+        `Question: ${qa.question}\nShort answer:`
       );
 
     default:
       return (
         preamble +
-        baseInstruction +
-        `Question: ${qa.question}\nAnswer:`
+        'Based on the above context, write an answer in the form of a short phrase for the following question. ' +
+        'Answer with exact words from the context whenever possible.\n\n' +
+        `Question: ${qa.question}\nShort answer:`
       );
   }
 }
