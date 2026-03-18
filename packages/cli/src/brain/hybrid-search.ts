@@ -48,6 +48,7 @@ export interface HybridSearchOptions {
   after?: Date;
   before?: Date;
   expandQuery?: boolean;
+  factFirst?: boolean;  // Use fact-first retrieval instead of chunk-based
 }
 
 /**
@@ -97,7 +98,32 @@ export async function hybridSearch(
     after,
     before,
     expandQuery = false,
+    factFirst = false,
   } = options;
+
+  // Fact-first retrieval: delegate to fact-retrieval engine
+  if (factFirst) {
+    const { factFirstSearch } = await import('./fact-retrieval.js');
+    const factResult = await factFirstSearch(query, root, {
+      limit: limit,
+      tokenBudget: 4000,
+      includeSupporting: true,
+    });
+
+    // Convert FactSearchResult to HybridSearchResult[] for backwards compat
+    return factResult.facts.map(f => ({
+      id: String(f.id),
+      title: `[${f.category}] ${f.content.slice(0, 80)}`,
+      content: f.content,
+      source_path: `fact://${f.id}`,
+      timestamp: f.timestamp,
+      type: 'note',
+      semanticScore: f.score,
+      metadataScore: 0,
+      hybridScore: f.score,
+      matchType: 'semantic' as const,
+    }));
+  }
 
   logger.debug('Hybrid search starting', { query, tier, limit, expandQuery });
 

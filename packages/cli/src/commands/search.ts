@@ -40,6 +40,7 @@ interface SearchOptions {
   tier?: string;
   minPriority?: string;
   group?: boolean;
+  factFirst?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -311,6 +312,7 @@ async function handleSearch(query: string, options: SearchOptions) {
       after: options.after ? parseNaturalDate(options.after) : undefined,
       before: options.before ? parseNaturalDate(options.before) : undefined,
       includeRelated: true,
+      factFirst: options.factFirst,
     });
 
     if (hybridResults.length === 0) {
@@ -392,6 +394,7 @@ export function createSearchCommand(): Command {
     .option('-g, --group', 'Group results by document (semantic-only mode)', true)
     .option('--no-group', 'Show individual chunks without grouping')
     .option('--semantic-only', 'Use pure semantic search without sleep agent intelligence', false)
+    .option('--fact-first', 'Use fact-first retrieval (search extracted facts instead of raw chunks)', false)
     .option('--tier <tier>', 'Filter by tier: hot, warm, archive, all', 'all')
     .option('--min-priority <n>', 'Minimum priority score 0-1', '0')
     .action(handleSearch);
