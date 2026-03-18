@@ -10,6 +10,7 @@
 
 import { createLogger } from '../../../logger.js';
 import { getTimelineDb } from '../../timeline.js';
+import { ensureFactsTable } from '../../fact-store.js';
 import { SleepConfig } from '../config.js';
 
 const logger = createLogger('sleep:decay');
@@ -39,6 +40,23 @@ export async function runDecayStep(
   let updated = 0;
   let processed = 0;
   const errors: string[] = [];
+
+  // Sweep expired temporal facts before running decay logic
+  try {
+    await ensureFactsTable(root);
+    const timeline = await getTimelineDb(root);
+    const expired = timeline.prepare(`
+      UPDATE facts SET is_latest = 0, updated_at = datetime('now')
+      WHERE expires_at IS NOT NULL
+        AND expires_at < datetime('now')
+        AND is_latest = 1
+    `).run();
+    if (expired.changes > 0) {
+      logger.debug(`Expired ${expired.changes} time-bound facts`);
+    }
+  } catch {
+    // Non-fatal: facts table may not exist yet
+  }
 
   try {
     const items = db.prepare(`

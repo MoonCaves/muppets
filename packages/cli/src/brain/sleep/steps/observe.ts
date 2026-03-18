@@ -13,7 +13,9 @@
 import { createLogger } from '../../../logger.js';
 import { getTimelineDb } from '../../timeline.js';
 import { getClaudeClient } from '../../../claude.js';
-import { storeFact, ensureFactsTable, VALID_CATEGORIES, type FactInput, type FactCategory } from '../../fact-store.js';
+import { storeFact, ensureFactsTable, markFactSuperseded, VALID_CATEGORIES, type FactInput, type FactCategory } from '../../fact-store.js';
+import { detectContradictions } from '../../fact-contradiction.js';
+import { detectTemporalExpiry } from '../../fact-temporal.js';
 import type { SleepConfig } from '../config.js';
 
 const logger = createLogger('sleep:observe');
@@ -72,8 +74,10 @@ export async function runObserveStep(
   const timeline = await getTimelineDb(root);
   let factsCreated = 0;
   let processed = 0;
+  let contradictionChecks = 0;
   const errors: string[] = [];
   const maxPerRun = config.maxFactsPerRun || 20;
+  const maxContradictionChecks = config.maxContradictionChecksPerRun || 30;
 
   try {
     // Find conversation events that don't have facts extracted yet.
@@ -161,9 +165,37 @@ export async function runObserveStep(
             category: fact.category as FactCategory,
           };
 
+          // Detect temporal expressions and set automatic expiry
+          const temporal = detectTemporalExpiry(fact.content, event.timestamp);
+          if (temporal.expires_at) {
+            factInput.expires_at = temporal.expires_at;
+          }
+
           try {
-            await storeFact(root, factInput);
+            const storedId = await storeFact(root, factInput);
             factsCreated++;
+
+            // Check for contradictions with existing facts
+            if (config.enableContradictionDetection && contradictionChecks < maxContradictionChecks) {
+              try {
+                const contradictionResult = await detectContradictions(root, {
+                  content: factInput.content,
+                  entities: factInput.entities,
+                  category: factInput.category,
+                });
+                contradictionChecks++;
+
+                for (const c of contradictionResult.contradictions) {
+                  if (c.relationship === 'updates') {
+                    await markFactSuperseded(root, c.oldFactId, storedId);
+                    logger.debug(`Fact ${c.oldFactId} superseded by ${storedId}: ${c.rationale}`);
+                  }
+                }
+              } catch (err) {
+                // Contradiction detection is non-fatal
+                logger.debug(`Contradiction check failed for fact ${storedId}: ${err}`);
+              }
+            }
           } catch (err) {
             // Skip duplicates or storage errors for individual facts
             logger.debug(`Failed to store fact ${i} from ${event.source_path}: ${err}`);

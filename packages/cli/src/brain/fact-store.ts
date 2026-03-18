@@ -47,11 +47,20 @@ export interface FactInput {
   timestamp: string;
   confidence: number;
   category: FactCategory;
+  expires_at?: string;  // ISO 8601 — temporal facts expire automatically
 }
 
 export interface StoredFact extends FactInput {
   id: number;
   created_at: string;
+  is_latest: number;
+  superseded_by: number | null;
+}
+
+export interface GetFactsOptions {
+  latestOnly?: boolean;
+  limit?: number;
+  category?: FactCategory;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -87,6 +96,28 @@ export async function ensureFactsTable(root: string): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_facts_source_path
       ON facts(source_path);
   `);
+
+  // Migration: add is_latest and superseded_by columns if not present
+  const cols = db.prepare(`PRAGMA table_info(facts)`).all() as Array<{ name: string }>;
+  const colNames = new Set(cols.map(c => c.name));
+
+  if (!colNames.has('is_latest')) {
+    db.exec(`ALTER TABLE facts ADD COLUMN is_latest INTEGER DEFAULT 1`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_is_latest ON facts(is_latest)`);
+  }
+  if (!colNames.has('superseded_by')) {
+    db.exec(`ALTER TABLE facts ADD COLUMN superseded_by INTEGER`);
+  }
+  if (!colNames.has('expires_at')) {
+    db.exec(`ALTER TABLE facts ADD COLUMN expires_at TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_facts_expires_at ON facts(expires_at)`);
+  }
+  if (!colNames.has('updated_at')) {
+    db.exec(`ALTER TABLE facts ADD COLUMN updated_at TEXT`);
+  }
+  if (!colNames.has('access_count')) {
+    db.exec(`ALTER TABLE facts ADD COLUMN access_count INTEGER DEFAULT 0`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -101,8 +132,8 @@ export async function storeFact(root: string, fact: FactInput): Promise<number> 
 
   const result = db.prepare(`
     INSERT OR REPLACE INTO facts
-      (content, source_path, source_conversation_id, entities_json, timestamp, confidence, category)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (content, source_path, source_conversation_id, entities_json, timestamp, confidence, category, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     fact.content,
     fact.source_path,
@@ -111,6 +142,7 @@ export async function storeFact(root: string, fact: FactInput): Promise<number> 
     fact.timestamp,
     fact.confidence,
     fact.category,
+    fact.expires_at || null,
   );
 
   const factId = result.lastInsertRowid as number;
@@ -141,4 +173,89 @@ export async function storeFact(root: string, fact: FactInput): Promise<number> 
   });
 
   return factId;
+}
+
+/**
+ * Retrieve facts associated with a given entity name.
+ * Searches entities_json for a case-insensitive match.
+ */
+export async function getFactsForEntity(
+  root: string,
+  entity: string,
+  options: GetFactsOptions = {}
+): Promise<StoredFact[]> {
+  const { latestOnly = true, limit = 20, category } = options;
+  const db = await getTimelineDb(root);
+
+  // SQLite JSON: search entities_json for the entity name (case-insensitive)
+  const entityPattern = `%${entity.toLowerCase()}%`;
+
+  let sql = `
+    SELECT id, content, source_path, source_conversation_id, entities_json,
+           timestamp, confidence, category, created_at,
+           COALESCE(is_latest, 1) as is_latest,
+           superseded_by
+    FROM facts
+    WHERE LOWER(entities_json) LIKE ?
+  `;
+  const params: unknown[] = [entityPattern];
+
+  if (latestOnly) {
+    sql += ` AND COALESCE(is_latest, 1) = 1`;
+  }
+  if (category) {
+    sql += ` AND category = ?`;
+    params.push(category);
+  }
+
+  sql += ` ORDER BY timestamp DESC LIMIT ?`;
+  params.push(limit);
+
+  const rows = db.prepare(sql).all(...params) as Array<{
+    id: number;
+    content: string;
+    source_path: string;
+    source_conversation_id: string;
+    entities_json: string;
+    timestamp: string;
+    confidence: number;
+    category: string;
+    created_at: string;
+    is_latest: number;
+    superseded_by: number | null;
+  }>;
+
+  return rows.map(row => ({
+    id: row.id,
+    content: row.content,
+    source_path: row.source_path,
+    source_conversation_id: row.source_conversation_id,
+    entities: JSON.parse(row.entities_json || '[]'),
+    timestamp: row.timestamp,
+    confidence: row.confidence,
+    category: row.category as FactCategory,
+    created_at: row.created_at,
+    is_latest: row.is_latest,
+    superseded_by: row.superseded_by,
+  }));
+}
+
+/**
+ * Mark a fact as superseded by a newer fact.
+ * Sets is_latest=0 and records which fact replaced it.
+ */
+export async function markFactSuperseded(
+  root: string,
+  oldFactId: number,
+  newFactId: number
+): Promise<void> {
+  const db = await getTimelineDb(root);
+
+  db.prepare(`
+    UPDATE facts
+    SET is_latest = 0, superseded_by = ?
+    WHERE id = ?
+  `).run(newFactId, oldFactId);
+
+  logger.debug('Marked fact as superseded', { oldFactId, newFactId });
 }

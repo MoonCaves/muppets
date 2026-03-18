@@ -47,6 +47,12 @@ export interface SleepConfig {
 
   enableFactExtraction: boolean;
   maxFactsPerRun: number;
+
+  enableContradictionDetection: boolean;
+  maxContradictionChecksPerRun: number;
+
+  enableUserProfile: boolean;
+  profileRefreshMinutes: number;
 }
 
 export const DEFAULT_CONFIG: SleepConfig = {
@@ -94,4 +100,10 @@ export const DEFAULT_CONFIG: SleepConfig = {
 
   enableFactExtraction: true,
   maxFactsPerRun: 20,
+
+  enableContradictionDetection: true,
+  maxContradictionChecksPerRun: 30,
+
+  enableUserProfile: true,
+  profileRefreshMinutes: 60,
 };
