@@ -14,7 +14,7 @@
 import { Command } from 'commander';
 import Database from 'better-sqlite3';
 import { join, resolve } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { getRoot } from '../config.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -677,6 +677,195 @@ function evalSleepAgent(sleepDb: Database.Database): EvalResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// EVAL 7: FACT STORE QUALITY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function evalFactStore(timelineDb: Database.Database): EvalResult {
+  const result: EvalResult = {
+    name: 'Fact Store Quality',
+    score: 0,
+    maxScore: 100,
+    grade: 'F',
+    details: [],
+    issues: [],
+  };
+
+  // Check if facts table exists
+  let totalFacts = 0;
+  try {
+    totalFacts = (timelineDb.prepare('SELECT COUNT(*) as c FROM facts').get() as { c: number }).c;
+  } catch {
+    result.issues.push('No facts table — fact extraction not set up');
+    result.grade = grade(0, 100);
+    return result;
+  }
+
+  if (totalFacts === 0) {
+    result.issues.push('No facts extracted — run a sleep cycle to populate');
+    result.grade = grade(0, 100);
+    return result;
+  }
+
+  result.details.push(`Total facts: ${totalFacts}`);
+
+  // --- Fact count score (more facts = better coverage) ---
+  const countScore = Math.min(20, totalFacts); // 1 point per fact up to 20
+  if (totalFacts < 10) {
+    result.issues.push('Fewer than 10 facts — limited memory coverage');
+  }
+
+  // --- Category diversity (should have facts in multiple categories) ---
+  const categories = timelineDb.prepare(
+    'SELECT category, COUNT(*) as cnt FROM facts GROUP BY category ORDER BY cnt DESC'
+  ).all() as Array<{ category: string; cnt: number }>;
+  const categoryCount = categories.length;
+  const categoryScore = Math.min(20, categoryCount * 3); // 3 points per category up to 20
+  result.details.push(`Categories: ${categories.map(c => `${c.category}=${c.cnt}`).join(', ')}`);
+  if (categoryCount < 3) {
+    result.issues.push('Facts in fewer than 3 categories — extraction may be too narrow');
+  }
+
+  // --- Entity coverage (facts should mention named entities) ---
+  let factsWithEntities = 0;
+  try {
+    factsWithEntities = (timelineDb.prepare(
+      "SELECT COUNT(*) as c FROM facts WHERE entities_json != '[]' AND entities_json IS NOT NULL AND LENGTH(entities_json) > 2"
+    ).get() as { c: number }).c;
+  } catch { /* skip */ }
+  const entityCoverageRatio = totalFacts > 0 ? factsWithEntities / totalFacts : 0;
+  const entityCoverageScore = Math.min(20, Math.round(entityCoverageRatio * 25));
+  result.details.push(`Facts with entities: ${factsWithEntities}/${totalFacts} (${(entityCoverageRatio * 100).toFixed(0)}%)`);
+  if (entityCoverageRatio < 0.5) {
+    result.issues.push('Less than 50% of facts have entity annotations');
+  }
+
+  // --- Supersession tracking (should have some contradictions detected) ---
+  let supersededCount = 0;
+  try {
+    supersededCount = (timelineDb.prepare(
+      'SELECT COUNT(*) as c FROM facts WHERE is_latest = 0'
+    ).get() as { c: number }).c;
+  } catch { /* skip */ }
+  const latestCount = totalFacts - supersededCount;
+  // Having SOME superseded facts means contradiction detection is working
+  const contradictionScore = supersededCount > 0 ? 15 : (totalFacts > 20 ? 0 : 10);
+  result.details.push(`Current facts: ${latestCount}, superseded: ${supersededCount}`);
+  if (supersededCount === 0 && totalFacts > 20) {
+    result.issues.push('No superseded facts — contradiction detection may not be running');
+  }
+
+  // --- FTS index health ---
+  let ftsCount = 0;
+  try {
+    ftsCount = (timelineDb.prepare('SELECT COUNT(*) as c FROM facts_fts').get() as { c: number }).c;
+  } catch {
+    result.issues.push('Facts FTS index missing — fact search will not work');
+  }
+  const ftsRatio = totalFacts > 0 ? ftsCount / totalFacts : 0;
+  const ftsScore = ftsRatio >= 0.9 ? 15 : Math.round(ftsRatio * 15);
+  result.details.push(`FTS indexed: ${ftsCount}/${totalFacts} (${(ftsRatio * 100).toFixed(0)}%)`);
+  if (ftsRatio < 0.9) {
+    result.issues.push(`Only ${(ftsRatio * 100).toFixed(0)}% of facts in FTS index — run reindex`);
+  }
+
+  // --- Conversation coverage (what % of conversations have facts extracted) ---
+  let convsWithFacts = 0;
+  let totalConvs = 0;
+  try {
+    totalConvs = (timelineDb.prepare(
+      "SELECT COUNT(*) as c FROM timeline_events WHERE type = 'conversation' AND source_path NOT LIKE '%/seg_%'"
+    ).get() as { c: number }).c;
+    convsWithFacts = (timelineDb.prepare(
+      "SELECT COUNT(DISTINCT source_conversation_id) as c FROM facts"
+    ).get() as { c: number }).c;
+  } catch { /* skip */ }
+  const convCoverageRatio = totalConvs > 0 ? convsWithFacts / totalConvs : 0;
+  const convCoverageScore = Math.min(10, Math.round(convCoverageRatio * 12));
+  result.details.push(`Conversations with facts: ${convsWithFacts}/${totalConvs} (${(convCoverageRatio * 100).toFixed(0)}%)`);
+  if (convCoverageRatio < 0.5) {
+    result.issues.push('Less than 50% of conversations have facts extracted');
+  }
+
+  result.score = Math.round(countScore + categoryScore + entityCoverageScore + contradictionScore + ftsScore + convCoverageScore);
+  result.grade = grade(result.score, result.maxScore);
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EVAL 8: USER PROFILE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function evalUserProfile(root: string): EvalResult {
+  const result: EvalResult = {
+    name: 'User Profile',
+    score: 0,
+    maxScore: 100,
+    grade: 'F',
+    details: [],
+    issues: [],
+  };
+
+  const profilePath = join(root, 'data', 'user-profile.json');
+  if (!existsSync(profilePath)) {
+    result.issues.push('No user profile generated — run a sleep cycle');
+    result.grade = grade(0, 100);
+    return result;
+  }
+
+  let profile: any;
+  try {
+    profile = JSON.parse(readFileSync(profilePath, 'utf-8'));
+  } catch {
+    result.issues.push('User profile is corrupted or unreadable');
+    result.grade = grade(0, 100);
+    return result;
+  }
+
+  // --- Profile exists ---
+  const existsScore = 20;
+  result.details.push(`Profile generated: ${profile.generated_at || 'unknown'}`);
+
+  // --- Freshness (generated within last 2 hours) ---
+  let freshnessScore = 0;
+  if (profile.generated_at) {
+    const ageMinutes = (Date.now() - new Date(profile.generated_at).getTime()) / (1000 * 60);
+    freshnessScore = ageMinutes < 120 ? 20 : (ageMinutes < 1440 ? 10 : 0);
+    result.details.push(`Profile age: ${Math.round(ageMinutes)} minutes`);
+    if (ageMinutes > 1440) {
+      result.issues.push('Profile is older than 24 hours — sleep agent may not be refreshing');
+    }
+  }
+
+  // --- Section coverage ---
+  const sections = profile.sections || {};
+  const sectionNames = ['identity', 'preferences', 'relationships', 'current_plans', 'recent_events'];
+  let populatedSections = 0;
+  for (const name of sectionNames) {
+    const items = sections[name] || [];
+    if (items.length > 0) populatedSections++;
+  }
+  const sectionScore = Math.min(30, populatedSections * 6);
+  result.details.push(`Populated sections: ${populatedSections}/5 (${sectionNames.filter(n => (sections[n] || []).length > 0).join(', ')})`);
+  if (populatedSections < 3) {
+    result.issues.push('Fewer than 3 profile sections populated — limited user context');
+  }
+
+  // --- Fact count in profile ---
+  const factCount = profile.fact_count || 0;
+  const factScore = Math.min(15, factCount);
+  result.details.push(`Facts in profile: ${factCount}`);
+
+  // --- Top entities ---
+  const topEntities = profile.top_entities || [];
+  const entityScore = Math.min(15, topEntities.length * 2);
+  result.details.push(`Top entities tracked: ${topEntities.length}`);
+
+  result.score = Math.min(100, Math.round(existsScore + freshnessScore + sectionScore + factScore + entityScore));
+  result.grade = grade(result.score, result.maxScore);
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REPORT GENERATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -695,6 +884,8 @@ function runEval(root: string): EvalReport {
     results.push(evalEdgeQuality(sleepDb));
     results.push(evalTierDecay(timelineDb));
     results.push(evalSleepAgent(sleepDb));
+    results.push(evalFactStore(timelineDb));
+    results.push(evalUserProfile(root));
   } finally {
     entityDb.close();
     timelineDb.close();
