@@ -44,6 +44,9 @@ export interface SleepConfig {
 
   enableObservations: boolean;
   maxObservationsPerRun: number;
+
+  enableFactExtraction: boolean;
+  maxFactsPerRun: number;
 }
 
 export const DEFAULT_CONFIG: SleepConfig = {
@@ -88,4 +91,7 @@ export const DEFAULT_CONFIG: SleepConfig = {
 
   enableObservations: true,
   maxObservationsPerRun: 10,
+
+  enableFactExtraction: true,
+  maxFactsPerRun: 20,
 };

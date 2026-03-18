@@ -1,19 +1,19 @@
 /**
- * KyberBot — Sleep Agent: Observation Extraction Step
+ * KyberBot — Sleep Agent: Fact Extraction Step
  *
- * Extracts structured facts/observations from conversations and stores
- * them as separate searchable documents. This dramatically improves
- * retrieval quality — searching for "Where is Caroline from?" matches
- * the observation "Caroline is originally from Sweden" much better than
- * it matches the raw conversation text.
+ * Extracts structured facts from conversations and stores them in the
+ * facts table with category, confidence, and entity metadata. This
+ * dramatically improves retrieval quality — searching for "Where is
+ * Caroline from?" matches the fact "Caroline is originally from Sweden"
+ * much better than it matches the raw conversation text.
  *
  * Runs between summarize and entity-hygiene steps.
  */
 
 import { createLogger } from '../../../logger.js';
 import { getTimelineDb } from '../../timeline.js';
-import { indexDocument, isChromaAvailable } from '../../embeddings.js';
 import { getClaudeClient } from '../../../claude.js';
+import { storeFact, ensureFactsTable, VALID_CATEGORIES, type FactInput, type FactCategory } from '../../fact-store.js';
 import type { SleepConfig } from '../config.js';
 
 const logger = createLogger('sleep:observe');
@@ -24,21 +24,36 @@ export interface ObserveResult {
   errors?: string[];
 }
 
-const OBSERVATION_PROMPT = `Extract key facts from this conversation as a JSON array of short, self-contained statements.
+/** Shape of a single fact object returned by the LLM. */
+interface ExtractedFact {
+  content: string;
+  category: string;
+  confidence: number;
+  entities: string[];
+}
+
+const FACT_EXTRACTION_PROMPT = `Extract key facts from this conversation as a JSON array of objects.
+
+Each fact object has:
+- "content": The fact statement (8-25 words, specific and verifiable)
+- "category": One of: biographical, preference, event, relationship, temporal, opinion, plan, general
+- "confidence": 0.7-0.95 (how confident you are this is accurate)
+- "entities": Array of person/entity names mentioned in this fact
 
 Rules:
-- Each fact must be SPECIFIC and verifiable — not vague or generic
-- Include the person's NAME in each fact (never use pronouns like "she" or "they")
+- Each fact must be SPECIFIC and verifiable — not vague
+- Include the person's NAME in each fact (never use pronouns)
 - Include dates, numbers, and proper nouns whenever mentioned
-- Prefer facts about: relationships, preferences, events, decisions, origins, occupations, hobbies
-- Skip: greetings, opinions about the conversation itself, meta-commentary, filler
-- 5-15 facts depending on conversation length, each 8-25 words
+- Prefer: relationships, preferences, events, decisions, origins, occupations
+- Skip: greetings, opinions about the conversation itself, meta-commentary
+- 5-15 facts depending on conversation length
 
-Good examples:
-["Caroline moved from Sweden 4 years ago", "Melanie's daughter's birthday is August 13", "The charity race raised awareness for mental health", "Caroline collects classic children's books"]
-
-Bad examples (too vague):
-["They had a nice conversation", "Someone mentioned a trip", "Things were discussed"]
+Example output:
+[
+  {"content": "Caroline moved from Sweden 4 years ago", "category": "biographical", "confidence": 0.9, "entities": ["Caroline"]},
+  {"content": "Melanie's daughter's birthday is August 13", "category": "event", "confidence": 0.85, "entities": ["Melanie"]},
+  {"content": "Caroline wants to pursue counseling as a career", "category": "plan", "confidence": 0.8, "entities": ["Caroline"]}
+]
 
 Conversation:
 `;
@@ -47,20 +62,24 @@ export async function runObserveStep(
   root: string,
   config: SleepConfig
 ): Promise<ObserveResult> {
-  if (!config.enableObservations) {
+  if (!config.enableFactExtraction) {
     return { count: 0, processed: 0 };
   }
 
+  // Ensure the facts table exists before querying it
+  await ensureFactsTable(root);
+
   const timeline = await getTimelineDb(root);
-  let observationsCreated = 0;
+  let factsCreated = 0;
   let processed = 0;
   const errors: string[] = [];
-  const maxPerRun = config.maxObservationsPerRun || 10;
+  const maxPerRun = config.maxFactsPerRun || 20;
 
   try {
-    // Find conversation events that don't have observations yet
-    // An event has been observed if there exist observation:// events linking to it
-    const unobserved = timeline.prepare(`
+    // Find conversation events that don't have facts extracted yet.
+    // Check both the old observation:// timeline events (backwards compat)
+    // and the new facts table.
+    const unprocessed = timeline.prepare(`
       SELECT te.id, te.source_path, te.title, te.summary, te.timestamp,
              te.entities_json, te.topics_json
       FROM timeline_events te
@@ -70,6 +89,10 @@ export async function runObserveStep(
         AND NOT EXISTS (
           SELECT 1 FROM timeline_events obs
           WHERE obs.source_path LIKE 'observation://' || REPLACE(te.source_path, 'channel://', '') || '/%'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM facts f
+          WHERE f.source_path LIKE 'fact://' || REPLACE(te.source_path, 'channel://', '') || '/%'
         )
       ORDER BY te.timestamp DESC
       LIMIT ?
@@ -83,14 +106,14 @@ export async function runObserveStep(
       topics_json: string | null;
     }>;
 
-    if (unobserved.length === 0) {
-      logger.debug('No conversations need observation extraction');
+    if (unprocessed.length === 0) {
+      logger.debug('No conversations need fact extraction');
       return { count: 0, processed: 0 };
     }
 
     const client = getClaudeClient();
 
-    for (const event of unobserved) {
+    for (const event of unprocessed) {
       processed++;
 
       try {
@@ -98,7 +121,7 @@ export async function runObserveStep(
         const content = event.summary.slice(0, 4000);
 
         const response = await client.complete(
-          OBSERVATION_PROMPT + content,
+          FACT_EXTRACTION_PROMPT + content,
           {
             model: 'haiku',
             maxTokens: 1024,
@@ -109,91 +132,110 @@ export async function runObserveStep(
         // Parse JSON array from response
         const jsonMatch = response.match(/\[[\s\S]*\]/);
         if (!jsonMatch) {
-          logger.debug(`No JSON array found in observation response for ${event.source_path}`);
+          logger.debug(`No JSON array found in fact extraction response for ${event.source_path}`);
           continue;
         }
 
-        let facts: string[];
+        let rawFacts: ExtractedFact[];
         try {
-          facts = JSON.parse(jsonMatch[0]);
-          if (!Array.isArray(facts)) continue;
-          facts = facts.filter(f => typeof f === 'string' && f.length >= 10 && f.length <= 200);
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (!Array.isArray(parsed)) continue;
+          rawFacts = parsed;
         } catch {
-          logger.debug(`Failed to parse observation JSON for ${event.source_path}`);
+          logger.debug(`Failed to parse fact extraction JSON for ${event.source_path}`);
           continue;
         }
 
-        // Store each fact as a separate searchable document
+        // Validate and normalize each extracted fact
         const parentId = event.source_path.replace('channel://', '');
-        const entities = safeParseArray(event.entities_json);
-        const topics = safeParseArray(event.topics_json);
+        const validFacts = validateFacts(rawFacts);
 
-        for (const [i, fact] of facts.entries()) {
-          const obsPath = `observation://${parentId}/${i}`;
-          const obsId = `obs_${parentId.replace(/[^a-zA-Z0-9]/g, '_')}_${i}`;
+        for (const [i, fact] of validFacts.entries()) {
+          const factInput: FactInput = {
+            content: fact.content,
+            source_path: `fact://${parentId}/${i}`,
+            source_conversation_id: parentId,
+            entities: fact.entities || [],
+            timestamp: event.timestamp,
+            confidence: fact.confidence,
+            category: fact.category as FactCategory,
+          };
 
-          // Store in timeline (for FTS search)
           try {
-            timeline.prepare(`
-              INSERT OR REPLACE INTO timeline_events
-              (type, timestamp, title, summary, source_path, entities_json, topics_json, priority, tier)
-              VALUES (?, ?, ?, ?, ?, ?, ?, 0.7, 'hot')
-            `).run(
-              'note',
-              event.timestamp,
-              `[observation] ${fact.slice(0, 97)}`,
-              fact,
-              obsPath,
-              event.entities_json || '[]',
-              event.topics_json || '[]'
-            );
-          } catch {
-            // Skip duplicate observations
-            continue;
+            await storeFact(root, factInput);
+            factsCreated++;
+          } catch (err) {
+            // Skip duplicates or storage errors for individual facts
+            logger.debug(`Failed to store fact ${i} from ${event.source_path}: ${err}`);
           }
-
-          // Store in ChromaDB (for semantic search)
-          try {
-            if (isChromaAvailable()) {
-              await indexDocument(obsId, fact, {
-                type: 'note',
-                source_path: obsPath,
-                title: `[observation] ${fact.slice(0, 80)}`,
-                timestamp: event.timestamp,
-                entities,
-                topics,
-                summary: fact,
-              });
-            }
-          } catch {
-            // Embedding is best-effort
-          }
-
-          observationsCreated++;
         }
 
-        logger.debug(`Extracted ${facts.length} observations from ${event.source_path}`);
+        logger.debug(`Extracted ${validFacts.length} facts from ${event.source_path}`);
       } catch (err) {
-        errors.push(`Failed to observe ${event.source_path}: ${err}`);
+        errors.push(`Failed to extract facts from ${event.source_path}: ${err}`);
       }
     }
 
-    if (observationsCreated > 0) {
-      logger.info('Observation extraction complete', { observations: observationsCreated, conversations: processed });
+    if (factsCreated > 0) {
+      logger.info('Fact extraction complete', { facts: factsCreated, conversations: processed });
     }
   } catch (err) {
     errors.push(`Observe step failed: ${err}`);
   }
 
-  return { count: observationsCreated, processed, errors: errors.length > 0 ? errors : undefined };
+  return { count: factsCreated, processed, errors: errors.length > 0 ? errors : undefined };
 }
 
-function safeParseArray(json: string | null): string[] {
-  if (!json) return [];
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+/**
+ * Validate and normalize extracted facts from the LLM response.
+ *
+ * Filters out facts that are too short/long, clamps confidence to a valid
+ * range, defaults invalid categories, and warns on empty entities.
+ */
+function validateFacts(rawFacts: unknown[]): ExtractedFact[] {
+  const validated: ExtractedFact[] = [];
+
+  for (const raw of rawFacts) {
+    if (!raw || typeof raw !== 'object') continue;
+
+    const fact = raw as Record<string, unknown>;
+
+    // Content must be a string
+    if (typeof fact.content !== 'string') continue;
+
+    const content = fact.content.trim();
+
+    // Filter: content length must be 10-200 chars
+    if (content.length < 10 || content.length > 200) continue;
+
+    // Normalize category: default to 'general' if missing or invalid
+    let category = 'general';
+    if (typeof fact.category === 'string' && VALID_CATEGORIES.has(fact.category)) {
+      category = fact.category;
+    }
+
+    // Normalize confidence: clamp to 0.5-1.0 range, default to 0.7
+    let confidence = 0.7;
+    if (typeof fact.confidence === 'number' && isFinite(fact.confidence)) {
+      if (fact.confidence < 0.5 || fact.confidence > 1.0) {
+        confidence = 0.7;
+      } else {
+        confidence = fact.confidence;
+      }
+    }
+
+    // Normalize entities: must be an array of strings
+    let entities: string[] = [];
+    if (Array.isArray(fact.entities)) {
+      entities = fact.entities.filter((e): e is string => typeof e === 'string' && e.length > 0);
+    }
+
+    if (entities.length === 0) {
+      logger.debug(`Fact has no entities: "${content.slice(0, 60)}"`);
+    }
+
+    validated.push({ content, category, confidence, entities });
   }
+
+  return validated;
 }
