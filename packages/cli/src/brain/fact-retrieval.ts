@@ -3,10 +3,11 @@
  *
  * Replaces the current RAG-first approach (search chunks -> build context)
  * with a fact-first approach:
- *   Layer 1: Search facts (FTS5 + ChromaDB)
- *   Layer 2: Entity expansion (same entity -> related facts)
- *   Layer 3: Supporting context (source conversation segments)
- *   Layer 4: Context optimization (prune to token budget, deduplicate)
+ *   Layer 1:   Search facts (FTS5 + ChromaDB)
+ *   Layer 2:   Entity expansion (3-hop BFS graph traversal)
+ *   Layer 2.5: Scene expansion + bridge discovery
+ *   Layer 3:   Supporting context (source conversation segments)
+ *   Layer 4:   Context optimization (prune to token budget, deduplicate)
  *
  * This produces better context because atomic facts match questions
  * more precisely than raw conversation chunks.
@@ -36,7 +37,7 @@ export interface FactSearchResult {
     timestamp: string;
     entities: string[];
     score: number;
-    source: 'direct' | 'entity_expansion';
+    source: 'direct' | 'entity_expansion' | 'graph_expansion' | 'scene_expansion' | 'bridge';
   }>;
   supporting_context: Array<{
     content: string;
@@ -49,6 +50,9 @@ export interface FactSearchResult {
   stats: {
     direct_facts: number;
     expanded_facts: number;
+    graph_expanded_facts: number;
+    scene_expanded_facts: number;
+    bridge_facts: number;
     supporting_chunks: number;
     pruned_items: number;
   };
@@ -97,7 +101,8 @@ interface ScoredFact {
   timestamp: string;
   entities: string[];
   score: number;
-  source: 'direct' | 'entity_expansion';
+  source: 'direct' | 'entity_expansion' | 'graph_expansion' | 'scene_expansion' | 'bridge';
+  source_conversation_id?: string;
 }
 
 /**
@@ -132,7 +137,7 @@ async function searchFactsDirect(
     try {
       const ftsRows = db.prepare(`
         SELECT f.id, f.content, f.category, f.confidence, f.timestamp,
-               f.entities_json, f.is_latest, f.expires_at
+               f.entities_json, f.is_latest, f.expires_at, f.source_conversation_id
         FROM facts f
         JOIN facts_fts fts ON f.id = fts.rowid
         WHERE facts_fts MATCH ?
@@ -149,6 +154,7 @@ async function searchFactsDirect(
         entities_json: string;
         is_latest: number;
         expires_at: string | null;
+        source_conversation_id: string;
       }>;
 
       for (const row of ftsRows) {
@@ -161,6 +167,7 @@ async function searchFactsDirect(
           entities: JSON.parse(row.entities_json || '[]'),
           score: 0.6, // Base score for FTS results
           source: 'direct',
+          source_conversation_id: row.source_conversation_id,
         });
       }
     } catch (err) {
@@ -267,12 +274,68 @@ async function searchFactsDirect(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LAYER 2: ENTITY EXPANSION
+// LAYER 2: ENTITY EXPANSION (3-hop graph traversal)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Detect entity names in the query and fetch their associated facts.
- * Results are scored at 0.7x to rank slightly below direct matches.
+ * Traverse the entity graph up to maxHops hops from seed entities,
+ * collecting all reached entity IDs via breadth-first search.
+ * Returns entities annotated with their hop distance from the seeds.
+ */
+function traverseEntityGraph(
+  entityDb: import('better-sqlite3').Database,
+  seedEntityIds: number[],
+  maxHops: number = 3,
+  maxEntities: number = 20
+): Array<{ id: number; hopDistance: number }> {
+  const visited = new Map<number, number>(); // id -> hopDistance
+  for (const id of seedEntityIds) {
+    visited.set(id, 0);
+  }
+  let frontier = [...seedEntityIds];
+
+  for (let hop = 0; hop < maxHops && frontier.length > 0; hop++) {
+    const nextFrontier: number[] = [];
+
+    for (const entityId of frontier) {
+      // Get connected entities via entity_relations
+      try {
+        const connected = entityDb.prepare(`
+          SELECT CASE WHEN source_id = ? THEN target_id ELSE source_id END as connected_id
+          FROM entity_relations
+          WHERE source_id = ? OR target_id = ?
+          ORDER BY strength DESC
+          LIMIT 10
+        `).all(entityId, entityId, entityId) as Array<{ connected_id: number }>;
+
+        for (const c of connected) {
+          if (!visited.has(c.connected_id) && visited.size < maxEntities) {
+            visited.set(c.connected_id, hop + 1);
+            nextFrontier.push(c.connected_id);
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    frontier = nextFrontier;
+  }
+
+  return Array.from(visited.entries()).map(([id, hopDistance]) => ({ id, hopDistance }));
+}
+
+/** Hop-distance to score multiplier: closer entities are more relevant. */
+const HOP_DISTANCE_PENALTY: Record<number, number> = {
+  0: 1.0,
+  1: 0.7,
+  2: 0.5,
+  3: 0.3,
+};
+
+/**
+ * Detect entity names in the query, traverse the entity graph up to 3 hops,
+ * and fetch facts for all reached entities.
+ *
+ * Hop 0 (seed) entities get 1.0x score, hop 1 = 0.7x, hop 2 = 0.5x, hop 3 = 0.3x.
  */
 async function expandByEntities(
   root: string,
@@ -298,19 +361,47 @@ async function expandByEntities(
 
     if (matchedEntities.length === 0) return [];
 
+    // 3-hop BFS traversal from seed entities
+    const seedEntityIds = matchedEntities.slice(0, 5).map(e => e.id);
+    const reachedEntities = traverseEntityGraph(entityDb, seedEntityIds, 3, 20);
+
+    // Build a map of entity ID -> name for all reached entities
+    const entityNameMap = new Map<number, string>();
+    for (const e of allEntities) {
+      entityNameMap.set(e.id, e.name);
+    }
+    // Also look up names for graph-traversed entities not in the initial allEntities
+    for (const reached of reachedEntities) {
+      if (!entityNameMap.has(reached.id)) {
+        try {
+          const row = entityDb.prepare('SELECT name FROM entities WHERE id = ?')
+            .get(reached.id) as { name: string } | undefined;
+          if (row) entityNameMap.set(reached.id, row.name);
+        } catch { /* skip */ }
+      }
+    }
+
     // Build a set of existing fact content for deduplication
     const existingContent = existingFacts.map(f => f.content);
 
     const { getFactsForEntity } = await import('./fact-store.js');
 
-    for (const entity of matchedEntities.slice(0, 5)) {
-      const entityFacts = await getFactsForEntity(root, entity.name, {
+    for (const reached of reachedEntities) {
+      const entityName = entityNameMap.get(reached.id);
+      if (!entityName) continue;
+
+      const entityFacts = await getFactsForEntity(root, entityName, {
         latestOnly: true,
         limit: 10,
       });
 
+      const distancePenalty = HOP_DISTANCE_PENALTY[reached.hopDistance] ?? 0.3;
+      const source: ScoredFact['source'] = reached.hopDistance === 0
+        ? 'entity_expansion'
+        : 'graph_expansion';
+
       for (const ef of entityFacts) {
-        // Skip if already in direct results (>80% overlap)
+        // Skip if already in direct results or expanded (>80% overlap)
         const isDuplicate = existingContent.some(
           ec => wordOverlap(ec, ef.content) > 0.8
         ) || expanded.some(
@@ -319,7 +410,6 @@ async function expandByEntities(
 
         if (isDuplicate) continue;
 
-        // Apply 0.7x score multiplier for entity-expanded facts
         const baseScore = ef.confidence || 0.7;
         expanded.push({
           id: ef.id,
@@ -328,8 +418,9 @@ async function expandByEntities(
           confidence: ef.confidence,
           timestamp: ef.timestamp,
           entities: ef.entities,
-          score: baseScore * 0.7,
-          source: 'entity_expansion',
+          score: baseScore * distancePenalty,
+          source,
+          source_conversation_id: ef.source_conversation_id,
         });
       }
     }
@@ -471,12 +562,18 @@ function optimizeContext(
     tokens = estimateTokens(assembled);
   }
 
-  // Prune entity-expanded facts next (lowest scored)
-  while (tokens > tokenBudget && keptFacts.some(f => f.source === 'entity_expansion')) {
-    // Find the lowest-scored entity_expansion fact
+  // Prune non-direct facts next (lowest scored first)
+  // Pruning priority: graph_expansion, scene_expansion, bridge, entity_expansion
+  const prunableSources = new Set<string>([
+    'graph_expansion', 'scene_expansion', 'bridge', 'entity_expansion',
+  ]);
+
+  while (tokens > tokenBudget && keptFacts.some(f => prunableSources.has(f.source))) {
+    // Find the lowest-scored prunable fact
     const idx = keptFacts.reduceRight((foundIdx, f, i) => {
-      if (f.source === 'entity_expansion' && foundIdx === -1) return i;
-      if (f.source === 'entity_expansion' && foundIdx !== -1 && f.score < keptFacts[foundIdx].score) return i;
+      if (!prunableSources.has(f.source)) return foundIdx;
+      if (foundIdx === -1) return i;
+      if (f.score < keptFacts[foundIdx].score) return i;
       return foundIdx;
     }, -1);
 
@@ -686,7 +783,133 @@ export async function factFirstSearch(
   logger.debug('Layer 2 complete', { expandedFacts: expandedFacts.length });
 
   // Merge direct + expanded (direct first for scoring priority)
-  const allFacts = [...directFacts, ...expandedFacts];
+  const allFacts: ScoredFact[] = [...directFacts, ...expandedFacts];
+
+  // ── Layer 2.5: Scene expansion + bridge discovery ──────────────────────
+  let sceneExpandedCount = 0;
+  let bridgeCount = 0;
+  const seenFactIds = new Set<number>(allFacts.map(f => f.id));
+
+  try {
+    const { getTimelineDb } = await import('./timeline.js');
+    const sceneDb = await getTimelineDb(root);
+
+    // Sort by score to identify top facts for scene expansion / bridge
+    const topFacts = [...allFacts].sort((a, b) => b.score - a.score);
+
+    // Scene expansion: find facts near the top results in the same conversation
+    for (const topFact of topFacts.slice(0, 5)) {
+      // Try to resolve source_conversation_id from the fact itself or from DB
+      let convId = topFact.source_conversation_id;
+      if (!convId && topFact.id > 0) {
+        try {
+          const row = sceneDb.prepare(
+            'SELECT source_conversation_id FROM facts WHERE id = ?'
+          ).get(topFact.id) as { source_conversation_id: string } | undefined;
+          if (row) convId = row.source_conversation_id;
+        } catch { /* best-effort */ }
+      }
+      if (!convId) continue;
+
+      try {
+        // Find other facts from the same conversation
+        const nearbyFacts = sceneDb.prepare(`
+          SELECT id, content, category, confidence, timestamp, entities_json, source_conversation_id
+          FROM facts
+          WHERE source_conversation_id = ?
+          AND id != ?
+          AND COALESCE(is_latest, 1) = 1
+          AND (expires_at IS NULL OR expires_at > datetime('now'))
+          ORDER BY ABS(id - ?) ASC
+          LIMIT 3
+        `).all(convId, topFact.id, topFact.id) as Array<{
+          id: number;
+          content: string;
+          category: string;
+          confidence: number;
+          timestamp: string;
+          entities_json: string;
+          source_conversation_id: string;
+        }>;
+
+        for (const nearby of nearbyFacts) {
+          if (!seenFactIds.has(nearby.id)) {
+            seenFactIds.add(nearby.id);
+            sceneExpandedCount++;
+            allFacts.push({
+              id: nearby.id,
+              content: nearby.content,
+              category: nearby.category || 'general',
+              confidence: nearby.confidence || 0.7,
+              timestamp: nearby.timestamp,
+              entities: JSON.parse(nearby.entities_json || '[]'),
+              score: topFact.score * 0.6,
+              source: 'scene_expansion',
+              source_conversation_id: nearby.source_conversation_id,
+            });
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
+    // Bridge discovery: find facts connecting top results
+    if (topFacts.length >= 2) {
+      const entities1 = new Set(
+        (topFacts[0].entities || []).map((e: string) => e.toLowerCase())
+      );
+      const entities2 = new Set(
+        (topFacts[1].entities || []).map((e: string) => e.toLowerCase())
+      );
+
+      if (entities1.size > 0 && entities2.size > 0) {
+        try {
+          const candidateFacts = sceneDb.prepare(`
+            SELECT id, content, category, confidence, timestamp, entities_json, source_conversation_id
+            FROM facts
+            WHERE COALESCE(is_latest, 1) = 1
+            AND (expires_at IS NULL OR expires_at > datetime('now'))
+            LIMIT 100
+          `).all() as Array<{
+            id: number;
+            content: string;
+            category: string;
+            confidence: number;
+            timestamp: string;
+            entities_json: string;
+            source_conversation_id: string;
+          }>;
+
+          for (const f of candidateFacts) {
+            const factEntities = JSON.parse(f.entities_json || '[]').map(
+              (e: string) => e.toLowerCase()
+            );
+            const matchesFirst = factEntities.some((e: string) => entities1.has(e));
+            const matchesSecond = factEntities.some((e: string) => entities2.has(e));
+
+            if (matchesFirst && matchesSecond && !seenFactIds.has(f.id)) {
+              seenFactIds.add(f.id);
+              bridgeCount++;
+              allFacts.push({
+                id: f.id,
+                content: f.content,
+                category: f.category || 'general',
+                confidence: f.confidence || 0.7,
+                timestamp: f.timestamp,
+                entities: JSON.parse(f.entities_json || '[]'),
+                score: 0.8, // Bridge facts are high value
+                source: 'bridge',
+                source_conversation_id: f.source_conversation_id,
+              });
+            }
+          }
+        } catch { /* best-effort */ }
+      }
+    }
+  } catch (err) {
+    logger.debug('Layer 2.5 (scene/bridge) failed', { error: String(err) });
+  }
+
+  logger.debug('Layer 2.5 complete', { sceneExpandedCount, bridgeCount });
 
   // Layer 3: Supporting context
   let supporting: SupportingChunk[] = [];
@@ -737,6 +960,9 @@ export async function factFirstSearch(
     stats: {
       direct_facts: directFacts.length,
       expanded_facts: expandedFacts.length,
+      graph_expanded_facts: expandedFacts.filter(f => f.source === 'graph_expansion').length,
+      scene_expanded_facts: sceneExpandedCount,
+      bridge_facts: bridgeCount,
       supporting_chunks: supporting.length,
       pruned_items: optimized.prunedCount,
     },

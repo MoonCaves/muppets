@@ -313,6 +313,7 @@ async function handleSearch(query: string, options: SearchOptions) {
       before: options.before ? parseNaturalDate(options.before) : undefined,
       includeRelated: true,
       factFirst: options.factFirst,
+      rerank: true,
     });
 
     if (hybridResults.length === 0) {

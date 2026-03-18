@@ -1,8 +1,11 @@
 /**
  * KyberBot — Hybrid Search
  *
- * Combines semantic search (ChromaDB) with keyword search (SQLite FTS5).
- * Weighting: 70% semantic + 30% metadata (configurable).
+ * Combines semantic search (ChromaDB) with keyword search (SQLite FTS5)
+ * and temporal search (date expressions). Uses Reciprocal Rank Fusion (RRF)
+ * to merge ranked lists without needing tuned weights.
+ *
+ * Optional Haiku-powered reranking for user-facing searches.
  */
 
 import { createLogger } from '../logger.js';
@@ -10,6 +13,7 @@ import { getRoot } from '../config.js';
 import { semanticSearch, SearchResult } from './embeddings.js';
 import { getTimelineDb } from './timeline.js';
 import { getSleepDb } from './sleep/db.js';
+import { getClaudeClient } from '../claude.js';
 
 const logger = createLogger('hybrid-search');
 
@@ -40,8 +44,8 @@ export interface HybridSearchOptions {
   tier?: 'hot' | 'warm' | 'archive' | 'all';
   minPriority?: number;
   includeRelated?: boolean;
-  semanticWeight?: number;
-  metadataWeight?: number;
+  semanticWeight?: number;   // kept for backwards compat — ignored (RRF used instead)
+  metadataWeight?: number;   // kept for backwards compat — ignored (RRF used instead)
   type?: 'conversation' | 'idea' | 'file' | 'transcript' | 'note';
   entity?: string;
   entityMatch?: 'all' | 'any';
@@ -49,7 +53,187 @@ export interface HybridSearchOptions {
   before?: Date;
   expandQuery?: boolean;
   factFirst?: boolean;  // Use fact-first retrieval instead of chunk-based
+  rerank?: boolean;     // default false — enable for user-facing searches
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECIPROCAL RANK FUSION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Reciprocal Rank Fusion — merges multiple ranked lists without needing
+ * tuned weights. Each item's score = sum(1 / (k + rank_in_list)) across
+ * all lists where it appears. k=60 is standard.
+ */
+function reciprocalRankFusion(
+  rankedLists: Array<Array<{ source_path: string; score: number; data: any }>>,
+  k: number = 60
+): Map<string, { rrfScore: number; data: any }> {
+  const fused = new Map<string, { rrfScore: number; data: any }>();
+
+  for (const list of rankedLists) {
+    // Sort by score descending to get rank positions
+    const sorted = [...list].sort((a, b) => b.score - a.score);
+
+    for (let rank = 0; rank < sorted.length; rank++) {
+      const item = sorted[rank];
+      const existing = fused.get(item.source_path);
+      const rrfContribution = 1 / (k + rank + 1);
+
+      if (existing) {
+        existing.rrfScore += rrfContribution;
+        // Keep the data with more info (prefer semantic results which have content)
+        if (item.data.content && (!existing.data.content || existing.data.content.length < item.data.content.length)) {
+          existing.data = { ...existing.data, ...item.data };
+        }
+      } else {
+        fused.set(item.source_path, {
+          rrfScore: rrfContribution,
+          data: item.data,
+        });
+      }
+    }
+  }
+
+  return fused;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEMPORAL SEARCH CHANNEL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Temporal search channel — finds results matching date expressions in the query.
+ */
+async function temporalSearch(
+  query: string,
+  root: string,
+  limit: number
+): Promise<Array<{ source_path: string; score: number; data: any }>> {
+  // Extract date-like terms from query
+  const datePatterns = [
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/gi,
+    /\b(20\d{2})\b/g,
+    /\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)/gi,
+  ];
+
+  const dateTerms: string[] = [];
+  for (const pattern of datePatterns) {
+    const matches = query.match(pattern);
+    if (matches) dateTerms.push(...matches);
+  }
+
+  if (dateTerms.length === 0) return [];
+
+  const timeline = await getTimelineDb(root);
+  const results: Array<{ source_path: string; score: number; data: any }> = [];
+
+  for (const term of dateTerms) {
+    try {
+      const rows = timeline.prepare(`
+        SELECT id, title, summary, source_path, timestamp, type
+        FROM timeline_events
+        WHERE LOWER(title) LIKE ? OR LOWER(summary) LIKE ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `).all(`%${term.toLowerCase()}%`, `%${term.toLowerCase()}%`, limit) as any[];
+
+      for (const row of rows) {
+        results.push({
+          source_path: row.source_path,
+          score: 1.0, // temporal matches are highly relevant
+          data: {
+            id: String(row.id),
+            title: row.title,
+            content: row.summary || '',
+            source_path: row.source_path,
+            timestamp: row.timestamp,
+            type: row.type,
+          },
+        });
+      }
+    } catch { /* best-effort */ }
+  }
+
+  return results;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HAIKU RERANKING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Rerank search results using Claude Haiku for better precision.
+ * Takes top N candidates and returns them reranked by relevance.
+ */
+async function haikusRerank(
+  query: string,
+  candidates: HybridSearchResult[],
+  limit: number
+): Promise<HybridSearchResult[]> {
+  if (candidates.length <= 3) return candidates; // Too few to bother reranking
+
+  // Take top 20 candidates for reranking (cost control)
+  const toRerank = candidates.slice(0, Math.min(20, candidates.length));
+
+  // Build reranking prompt
+  const numbered = toRerank.map((r, i) =>
+    `[${i + 1}] ${r.content.slice(0, 200)}`
+  ).join('\n');
+
+  const prompt = `Given the search query, rank these ${toRerank.length} text passages by relevance. Return ONLY a JSON array of the passage numbers in order of relevance, most relevant first. Example: [3, 1, 7, 2]
+
+Query: "${query}"
+
+Passages:
+${numbered}
+
+Ranking (JSON array of numbers):`;
+
+  try {
+    const client = getClaudeClient();
+    const response = await client.complete(prompt, {
+      model: 'haiku',
+      maxTokens: 200,
+      maxTurns: 1,
+    });
+
+    const match = response.match(/\[[\d,\s]+\]/);
+    if (!match) return candidates;
+
+    const ranking: number[] = JSON.parse(match[0]);
+    const reranked: HybridSearchResult[] = [];
+
+    for (const idx of ranking) {
+      const i = idx - 1; // Convert to 0-indexed
+      if (i >= 0 && i < toRerank.length) {
+        const result = toRerank[i];
+        result.hybridScore = 1.0 - (reranked.length * 0.05); // Descending score
+        reranked.push(result);
+      }
+    }
+
+    // Add any candidates not in the reranked list
+    for (const c of toRerank) {
+      if (!reranked.includes(c)) {
+        c.hybridScore = 0.1;
+        reranked.push(c);
+      }
+    }
+
+    // Add remaining candidates beyond top 20
+    reranked.push(...candidates.slice(20));
+
+    return reranked.slice(0, limit);
+  } catch {
+    // Reranking failed, return original order
+    return candidates;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// QUERY EXPANSION
+// ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Decompose a complex query into sub-queries for multi-hop retrieval.
@@ -79,6 +263,10 @@ function expandQueryTerms(query: string): string[] {
   return subQueries;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN HYBRID SEARCH
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function hybridSearch(
   query: string,
   rootDir?: string,
@@ -90,8 +278,6 @@ export async function hybridSearch(
     tier = 'all',
     minPriority = 0,
     includeRelated = true,
-    semanticWeight = 0.7,
-    metadataWeight = 0.3,
     type,
     entity,
     entityMatch = 'all',
@@ -99,6 +285,7 @@ export async function hybridSearch(
     before,
     expandQuery = false,
     factFirst = false,
+    rerank = false,
   } = options;
 
   // Fact-first retrieval: delegate to fact-retrieval engine
@@ -125,12 +312,12 @@ export async function hybridSearch(
     }));
   }
 
-  logger.debug('Hybrid search starting', { query, tier, limit, expandQuery });
+  logger.debug('Hybrid search starting', { query, tier, limit, expandQuery, rerank });
 
   // Generate sub-queries for multi-hop retrieval
   const queries = expandQuery ? expandQueryTerms(query) : [query];
 
-  // Run semantic search for all queries (sequentially to control memory)
+  // ─── Channel 1: Semantic search ──────────────────────────────────────────
   let semanticResults: SearchResult[] = [];
   for (const q of queries) {
     try {
@@ -153,102 +340,46 @@ export async function hybridSearch(
   }
   semanticResults = Array.from(seenPaths.values());
 
-  // Run metadata search (keywords only — expansion handled by semantic)
+  // Convert semantic results to ranked list format for RRF
+  const semanticRankedList = semanticResults.map(r => ({
+    source_path: r.metadata.source_path,
+    score: 1 - r.distance,
+    data: {
+      id: r.id,
+      title: r.metadata.title || 'Untitled',
+      content: r.content,
+      source_path: r.metadata.source_path,
+      timestamp: r.metadata.timestamp,
+      type: r.metadata.type,
+    },
+  }));
+
+  // ─── Channel 2: Metadata/keyword search ──────────────────────────────────
   const metadataResults = await metadataSearch(query, root, { limit: limit * 3 });
 
-  // Normalize scores
-  const maxSemantic = Math.max(...semanticResults.map(r => 1 - r.distance), 0.001);
-  const maxMetadata = Math.max(...metadataResults.map(r => r.score), 0.001);
+  // Convert metadata results to ranked list format for RRF
+  const metadataRankedList = metadataResults.map(r => ({
+    source_path: r.source_path,
+    score: r.score,
+    data: {
+      id: r.id?.toString() || r.source_path,
+      title: r.title,
+      content: r.summary || '',
+      source_path: r.source_path,
+      timestamp: r.timestamp,
+      type: r.type,
+      tier: r.tier,
+      priority: r.priority,
+      tags: r.tags,
+    },
+  }));
 
-  // Merge results - group by parent path, keep best 3 segments per conversation
-  const MAX_SEGMENTS_PER_PARENT = 3;
-  const merged = new Map<string, HybridSearchResult>();
+  // ─── Channel 3: Temporal search ──────────────────────────────────────────
+  const temporalResults = await temporalSearch(query, root, limit * 3);
 
-  // Track segments per parent path to allow multiple high-quality segments
-  const parentSegments = new Map<string, Array<{ sourcePath: string; score: number }>>();
+  // ─── Channel 4: Entity graph augmentation (for expanded queries) ─────────
+  const entityRankedList: Array<{ source_path: string; score: number; data: any }> = [];
 
-  for (const r of semanticResults) {
-    const normalizedScore = (1 - r.distance) / maxSemantic;
-    const parentPath = getParentPath(r.metadata.source_path);
-    const segments = parentSegments.get(parentPath) || [];
-
-    // Check if we should include this segment
-    if (segments.length < MAX_SEGMENTS_PER_PARENT) {
-      segments.push({ sourcePath: r.metadata.source_path, score: normalizedScore });
-      parentSegments.set(parentPath, segments);
-    } else {
-      // Replace the weakest segment if this one is better
-      const weakestIdx = segments.reduce((minIdx, seg, idx, arr) =>
-        seg.score < arr[minIdx].score ? idx : minIdx, 0);
-      if (normalizedScore > segments[weakestIdx].score) {
-        // Remove the old weakest entry from merged
-        merged.delete(segments[weakestIdx].sourcePath);
-        segments[weakestIdx] = { sourcePath: r.metadata.source_path, score: normalizedScore };
-      } else {
-        continue; // Skip this segment, it's weaker than all existing ones
-      }
-    }
-
-    const existing = merged.get(r.metadata.source_path);
-    if (!existing || normalizedScore > existing.semanticScore) {
-      merged.set(r.metadata.source_path, {
-        id: r.id,
-        title: r.metadata.title || 'Untitled',
-        content: existing ? (normalizedScore > existing.semanticScore ? r.content : existing.content) : r.content,
-        source_path: r.metadata.source_path,
-        timestamp: r.metadata.timestamp,
-        type: r.metadata.type,
-        semanticScore: normalizedScore,
-        metadataScore: existing?.metadataScore || 0,
-        hybridScore: normalizedScore * semanticWeight + (existing?.metadataScore || 0) * metadataWeight,
-        matchType: existing?.metadataScore ? 'both' : 'semantic',
-      });
-    }
-  }
-
-  for (const r of metadataResults) {
-    const normalizedScore = r.score / maxMetadata;
-    const parentPath = getParentPath(r.source_path);
-
-    // Try to match against existing entries: exact path first, then any segment of same parent
-    let existing = merged.get(r.source_path);
-    if (!existing) {
-      // Check if any segment of this parent conversation is already in merged
-      for (const [key, val] of merged) {
-        if (getParentPath(key) === parentPath) {
-          existing = val;
-          break;
-        }
-      }
-    }
-
-    if (existing) {
-      existing.metadataScore = Math.max(existing.metadataScore, normalizedScore);
-      existing.hybridScore = existing.semanticScore * semanticWeight + existing.metadataScore * metadataWeight;
-      existing.matchType = existing.semanticScore > 0 ? 'both' : 'keyword';
-      existing.tier = r.tier;
-      existing.priority = r.priority;
-      existing.tags = r.tags;
-    } else {
-      merged.set(r.source_path, {
-        id: r.id?.toString() || r.source_path,
-        title: r.title,
-        content: r.summary || '',
-        source_path: r.source_path,
-        timestamp: r.timestamp,
-        type: r.type,
-        tier: r.tier,
-        priority: r.priority,
-        tags: r.tags,
-        semanticScore: 0,
-        metadataScore: normalizedScore,
-        hybridScore: normalizedScore * metadataWeight,
-        matchType: 'keyword',
-      });
-    }
-  }
-
-  // Entity graph augmentation for expanded queries
   if (expandQuery) {
     try {
       const timeline = await getTimelineDb(root);
@@ -271,23 +402,22 @@ export async function hybridSearch(
         ).all(ent.id) as Array<{ source_path: string }>;
 
         for (const m of mentions) {
-          if (merged.has(m.source_path)) continue;
           const event = timeline.prepare(
             'SELECT id, title, summary, source_path, timestamp, type FROM timeline_events WHERE source_path = ?'
           ).get(m.source_path) as any;
 
           if (event) {
-            merged.set(event.source_path, {
-              id: String(event.id),
-              title: event.title || '',
-              content: event.summary || '',
+            entityRankedList.push({
               source_path: event.source_path,
-              timestamp: event.timestamp,
-              type: event.type,
-              semanticScore: 0,
-              metadataScore: 0.3,
-              hybridScore: 0.15,
-              matchType: 'keyword' as const,
+              score: 0.8, // Entity graph matches are moderately relevant
+              data: {
+                id: String(event.id),
+                title: event.title || '',
+                content: event.summary || '',
+                source_path: event.source_path,
+                timestamp: event.timestamp,
+                type: event.type,
+              },
             });
           }
         }
@@ -297,10 +427,80 @@ export async function hybridSearch(
     }
   }
 
-  // Enrich semantic-only results with tier/priority/tags from timeline
+  // ─── Reciprocal Rank Fusion ──────────────────────────────────────────────
+  const rankedLists: Array<Array<{ source_path: string; score: number; data: any }>> = [
+    semanticRankedList,
+    metadataRankedList,
+  ];
+
+  if (temporalResults.length > 0) {
+    rankedLists.push(temporalResults);
+  }
+
+  if (entityRankedList.length > 0) {
+    rankedLists.push(entityRankedList);
+  }
+
+  const fused = reciprocalRankFusion(rankedLists);
+
+  // ─── Convert fused results to HybridSearchResult[] ───────────────────────
+  // Determine matchType based on which channels contained each source_path
+  const semanticPaths = new Set(semanticRankedList.map(r => r.source_path));
+  const metadataPaths = new Set(metadataRankedList.map(r => r.source_path));
+
+  const merged = new Map<string, HybridSearchResult>();
+
+  for (const [sourcePath, { rrfScore, data }] of fused) {
+    const inSemantic = semanticPaths.has(sourcePath);
+    const inMetadata = metadataPaths.has(sourcePath);
+    const matchType: 'semantic' | 'keyword' | 'both' =
+      inSemantic && inMetadata ? 'both' :
+      inSemantic ? 'semantic' : 'keyword';
+
+    merged.set(sourcePath, {
+      id: data.id || sourcePath,
+      title: data.title || 'Untitled',
+      content: data.content || '',
+      source_path: sourcePath,
+      timestamp: data.timestamp || '',
+      type: data.type || 'note',
+      tier: data.tier,
+      priority: data.priority,
+      tags: data.tags,
+      semanticScore: inSemantic ? rrfScore : 0,
+      metadataScore: inMetadata ? rrfScore : 0,
+      hybridScore: rrfScore,
+      matchType,
+    });
+  }
+
+  // ─── Apply MAX_SEGMENTS_PER_PARENT after RRF fusion ──────────────────────
+  const MAX_SEGMENTS_PER_PARENT = 3;
+  const parentCounts = new Map<string, number>();
+  const toRemove: string[] = [];
+
+  // Sort by hybridScore to keep the best segments
+  const sortedEntries = Array.from(merged.entries())
+    .sort((a, b) => b[1].hybridScore - a[1].hybridScore);
+
+  for (const [sourcePath] of sortedEntries) {
+    const parentPath = getParentPath(sourcePath);
+    const count = parentCounts.get(parentPath) || 0;
+    if (count >= MAX_SEGMENTS_PER_PARENT) {
+      toRemove.push(sourcePath);
+    } else {
+      parentCounts.set(parentPath, count + 1);
+    }
+  }
+
+  for (const path of toRemove) {
+    merged.delete(path);
+  }
+
+  // ─── Enrich semantic-only results with tier/priority/tags from timeline ──
   await enrichResults(merged, root);
 
-  // Apply filters and sort
+  // ─── Apply filters and sort ──────────────────────────────────────────────
   let results = Array.from(merged.values())
     .filter(r => {
       // Tier filter
@@ -333,10 +533,16 @@ export async function hybridSearch(
       }
       return true;
     })
-    .sort((a, b) => b.hybridScore - a.hybridScore)
-    .slice(0, limit);
+    .sort((a, b) => b.hybridScore - a.hybridScore);
 
-  // Add related memories from sleep agent edges
+  // ─── Haiku reranking (opt-in) ────────────────────────────────────────────
+  if (rerank && results.length > 3) {
+    results = await haikusRerank(query, results, limit);
+  } else {
+    results = results.slice(0, limit);
+  }
+
+  // ─── Add related memories from sleep agent edges ─────────────────────────
   if (includeRelated && results.length > 0) {
     results = addRelatedMemories(results, root);
   }
@@ -344,12 +550,19 @@ export async function hybridSearch(
   logger.debug('Hybrid search completed', {
     semanticCount: semanticResults.length,
     metadataCount: metadataResults.length,
-    mergedCount: merged.size,
+    temporalCount: temporalResults.length,
+    entityCount: entityRankedList.length,
+    fusedCount: fused.size,
     resultCount: results.length,
+    reranked: rerank,
   });
 
   return results;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// METADATA SEARCH
+// ═══════════════════════════════════════════════════════════════════════════════
 
 interface MetadataResult {
   id: number;
@@ -453,6 +666,10 @@ async function metadataSearch(
     };
   }).sort((a, b) => b.score - a.score);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENRICHMENT & RELATED MEMORIES
+// ═══════════════════════════════════════════════════════════════════════════════
 
 async function enrichResults(
   merged: Map<string, HybridSearchResult>,
