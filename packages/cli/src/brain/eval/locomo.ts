@@ -41,6 +41,7 @@ import {
 } from '../entity-graph.js';
 import { resetSleepDb } from '../sleep/db.js';
 import { randomUUID } from 'crypto';
+import Database from 'better-sqlite3';
 
 const logger = createLogger('eval');
 
@@ -862,8 +863,70 @@ function buildTranscript(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Extract observations from ingested conversations and store them in
- * both timeline FTS and ChromaDB (via REST API).
+/**
+ * Create facts table + FTS5 in timeline.db (inline, no chromadb dependency).
+ */
+function ensureFactsTableInline(db: any): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        source_conversation_id TEXT,
+        entities_json TEXT DEFAULT '[]',
+        entity_ids_json TEXT DEFAULT '[]',
+        timestamp TEXT NOT NULL,
+        confidence REAL DEFAULT 0.7,
+        category TEXT NOT NULL DEFAULT 'general',
+        is_latest INTEGER DEFAULT 1,
+        superseded_by INTEGER,
+        supersedes INTEGER,
+        expires_at TEXT,
+        access_count INTEGER DEFAULT 0,
+        last_accessed TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_facts_is_latest ON facts(is_latest);
+      CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_path);
+      CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
+      CREATE INDEX IF NOT EXISTS idx_facts_timestamp ON facts(timestamp DESC);
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+        content,
+        entities,
+        category,
+        content=facts,
+        content_rowid=id
+      );
+
+      CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+        INSERT INTO facts_fts(rowid, content, entities, category)
+        VALUES (new.id, new.content, new.entities_json, new.category);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+        INSERT INTO facts_fts(facts_fts, rowid, content, entities, category)
+        VALUES ('delete', old.id, old.content, old.entities_json, old.category);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+        INSERT INTO facts_fts(facts_fts, rowid, content, entities, category)
+        VALUES ('delete', old.id, old.content, old.entities_json, old.category);
+        INSERT INTO facts_fts(rowid, content, entities, category)
+        VALUES (new.id, new.content, new.entities_json, new.category);
+      END;
+    `);
+  } catch {
+    // Already exists, ignore
+  }
+}
+
+/**
+ * Extract observations from ingested conversations and store them as
+ * structured facts in the facts table + ChromaDB (via REST API).
  */
 async function runObservations(
   root: string,
@@ -872,7 +935,10 @@ async function runObservations(
   const timeline = await getTimelineDb(root);
   let observationsCreated = 0;
 
-  // Find conversation events that don't have observations yet
+  // Ensure facts table exists
+  ensureFactsTableInline(timeline);
+
+  // Find conversation events that don't have observations/facts yet
   const unobserved = timeline.prepare(`
     SELECT te.id, te.source_path, te.title, te.summary, te.timestamp,
            te.entities_json, te.topics_json
@@ -883,6 +949,10 @@ async function runObservations(
       AND NOT EXISTS (
         SELECT 1 FROM timeline_events obs
         WHERE obs.source_path LIKE 'observation://' || REPLACE(te.source_path, 'channel://', '') || '/%'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM facts f
+        WHERE f.source_path LIKE 'fact://' || REPLACE(te.source_path, 'channel://', '') || '/%'
       )
     ORDER BY te.timestamp DESC
     LIMIT 100
@@ -909,10 +979,28 @@ async function runObservations(
       const obsMetadatas: Record<string, any>[] = [];
 
       for (const [i, fact] of facts.entries()) {
-        const obsPath = `observation://${parentId}/${i}`;
-        const obsId = `obs_${parentId.replace(/[^a-zA-Z0-9]/g, '_')}_${i}`;
+        const factPath = `fact://${parentId}/${i}`;
+        const obsId = `fact_${parentId.replace(/[^a-zA-Z0-9]/g, '_')}_${i}`;
 
-        // Store in timeline FTS
+        // Store in facts table
+        try {
+          timeline.prepare(`
+            INSERT OR REPLACE INTO facts
+            (content, source_path, source_conversation_id, entities_json, entity_ids_json,
+             timestamp, confidence, category, is_latest)
+            VALUES (?, ?, ?, ?, '[]', ?, 0.8, 'general', 1)
+          `).run(
+            fact,
+            factPath,
+            parentId,
+            event.entities_json || '[]',
+            event.timestamp
+          );
+        } catch {
+          // Skip duplicates
+        }
+
+        // Also store in timeline FTS for backwards compat
         try {
           timeline.prepare(`
             INSERT OR REPLACE INTO timeline_events
@@ -923,20 +1011,20 @@ async function runObservations(
             event.timestamp,
             `[observation] ${fact.slice(0, 97)}`,
             fact,
-            obsPath,
+            `observation://${parentId}/${i}`,
             event.entities_json || '[]',
             event.topics_json || '[]'
           );
         } catch {
-          continue;
+          // Skip duplicates
         }
 
         obsIds.push(obsId);
         obsTexts.push(fact);
         obsMetadatas.push({
           type: 'note',
-          source_path: obsPath,
-          title: `[observation] ${fact.slice(0, 80)}`,
+          source_path: factPath,
+          title: `[general] ${fact.slice(0, 80)}`,
           timestamp: event.timestamp,
         });
 
@@ -974,81 +1062,126 @@ async function answerQuestion(
   speakerB: string,
   chromaCollectionId: string
 ): Promise<string> {
-  // Semantic search via ChromaDB REST API
-  const queryEmbeddings = await embed([qa.question]);
-  const chromaResults = await chromaQuery(chromaCollectionId, queryEmbeddings[0], 15);
-
-  // Timeline FTS search
   const timeline = await getTimelineDb(root);
-  let ftsResults: Array<{ summary: string; timestamp: string }> = [];
-  try {
-    // Build FTS query: take significant words from the question
-    const ftsQuery = qa.question
-      .replace(/[^\w\s]/g, '')
-      .split(/\s+/)
-      .filter((w) => w.length > 2 && !['the', 'and', 'for', 'was', 'are', 'what', 'who', 'how', 'did', 'does', 'has', 'have', 'when', 'where', 'which', 'that', 'this', 'with'].includes(w.toLowerCase()))
-      .slice(0, 5)
-      .join(' OR ');
-
-    if (ftsQuery) {
-      ftsResults = timeline.prepare(`
-        SELECT te.summary, te.timestamp
-        FROM timeline_events te
-        WHERE te.id IN (
-          SELECT rowid FROM timeline_fts WHERE timeline_fts MATCH ?
-        )
-        ORDER BY te.timestamp DESC
-        LIMIT 10
-      `).all(ftsQuery) as Array<{ summary: string; timestamp: string }>;
-    }
-  } catch {
-    // FTS is best-effort
-  }
-
-  // Merge results: ChromaDB results first (semantic), then FTS results
-  const contextParts: string[] = [];
+  ensureFactsTableInline(timeline);
+  const factParts: string[] = [];
+  const supportParts: string[] = [];
   const seenContent = new Set<string>();
 
-  // Add ChromaDB results
-  if (chromaResults.documents && chromaResults.documents[0]) {
-    for (let i = 0; i < chromaResults.documents[0].length; i++) {
-      const doc = chromaResults.documents[0][i];
-      const meta = chromaResults.metadatas?.[0]?.[i] || {};
-      const timestamp = meta.timestamp || '';
-      const dateLabel = timestamp
-        ? new Date(timestamp).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          })
-        : 'Unknown date';
+  const stopwords = new Set(['the', 'and', 'for', 'was', 'are', 'what', 'who', 'how',
+    'did', 'does', 'has', 'have', 'when', 'where', 'which', 'that', 'this', 'with']);
+  const ftsQuery = qa.question
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !stopwords.has(w.toLowerCase()))
+    .slice(0, 5)
+    .join(' OR ');
 
-      const contentKey = doc?.slice(0, 100) || '';
-      if (contentKey && !seenContent.has(contentKey)) {
-        seenContent.add(contentKey);
-        contextParts.push(`[${dateLabel}] ${doc}`);
+  // ── Layer 1: Search facts (FTS + semantic) ──────────────────────────
+  try {
+    if (ftsQuery) {
+      const ftsFactResults = timeline.prepare(`
+        SELECT f.content, f.category, f.confidence, f.timestamp, f.entities_json
+        FROM facts f
+        WHERE f.id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH ?)
+        AND f.is_latest = 1
+        AND (f.expires_at IS NULL OR f.expires_at > datetime('now'))
+        ORDER BY f.confidence DESC
+        LIMIT 15
+      `).all(ftsQuery) as Array<{ content: string; category: string; confidence: number; timestamp: string }>;
+
+      for (const f of ftsFactResults) {
+        const key = f.content.slice(0, 80);
+        if (!seenContent.has(key)) {
+          seenContent.add(key);
+          factParts.push(`- [${f.category}] ${f.content}`);
+        }
       }
     }
-  }
+  } catch { /* FTS best-effort */ }
 
-  // Add FTS results that aren't already present
-  for (const ftsResult of ftsResults) {
-    const contentKey = ftsResult.summary?.slice(0, 100) || '';
-    if (contentKey && !seenContent.has(contentKey)) {
-      seenContent.add(contentKey);
-      const dateLabel = ftsResult.timestamp
-        ? new Date(ftsResult.timestamp).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          })
-        : 'Unknown date';
-      contextParts.push(`[${dateLabel}] ${ftsResult.summary}`);
+  // Semantic search over ChromaDB
+  try {
+    const queryEmbeddings = await embed([qa.question]);
+    const chromaResults = await chromaQuery(chromaCollectionId, queryEmbeddings[0], 20);
+
+    if (chromaResults.documents?.[0]) {
+      for (let i = 0; i < chromaResults.documents[0].length; i++) {
+        const doc = chromaResults.documents[0][i];
+        const meta = chromaResults.metadatas?.[0]?.[i] || {};
+        const sourcePath = (meta.source_path as string) || '';
+        const key = doc?.slice(0, 80) || '';
+        if (!key || seenContent.has(key)) continue;
+        seenContent.add(key);
+
+        if (sourcePath.startsWith('fact://')) {
+          const category = (meta.title as string)?.match(/^\[(\w+)\]/)?.[1] || 'general';
+          factParts.push(`- [${category}] ${doc}`);
+        } else {
+          const ts = (meta.timestamp as string) || '';
+          const dateLabel = ts ? new Date(ts).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+          supportParts.push(`[${dateLabel}] ${doc}`);
+        }
+      }
     }
-  }
+  } catch { /* semantic best-effort */ }
 
-  const context =
-    contextParts.join('\n---\n') || '(No relevant memories found)';
+  // ── Layer 2: Entity expansion ───────────────────────────────────────
+  try {
+    const entityDb = new Database(join(root, 'data', 'entity-graph.db'), { readonly: true });
+    const queryLower = qa.question.toLowerCase();
+    const allEntities = entityDb.prepare(
+      'SELECT id, name FROM entities ORDER BY mention_count DESC LIMIT 100'
+    ).all() as Array<{ id: number; name: string }>;
+
+    const matched = allEntities.filter(e => e.name.length >= 3 && queryLower.includes(e.name.toLowerCase())).slice(0, 3);
+    for (const entity of matched) {
+      try {
+        const entityFacts = timeline.prepare(`
+          SELECT content, category FROM facts
+          WHERE LOWER(entities_json) LIKE ? AND is_latest = 1
+          AND (expires_at IS NULL OR expires_at > datetime('now'))
+          ORDER BY confidence DESC LIMIT 10
+        `).all(`%${entity.name.toLowerCase()}%`) as Array<{ content: string; category: string }>;
+
+        for (const f of entityFacts) {
+          const key = f.content.slice(0, 80);
+          if (!seenContent.has(key)) {
+            seenContent.add(key);
+            factParts.push(`- [${f.category}] ${f.content}`);
+          }
+        }
+      } catch { /* skip */ }
+    }
+    entityDb.close();
+  } catch { /* entity expansion best-effort */ }
+
+  // ── Layer 3: Supporting conversation context ────────────────────────
+  try {
+    if (ftsQuery && supportParts.length < 10) {
+      const ftsResults = timeline.prepare(`
+        SELECT te.summary, te.timestamp FROM timeline_events te
+        WHERE te.id IN (SELECT rowid FROM timeline_fts WHERE timeline_fts MATCH ?)
+        AND te.type = 'conversation'
+        ORDER BY te.timestamp DESC LIMIT 10
+      `).all(ftsQuery) as Array<{ summary: string; timestamp: string }>;
+
+      for (const r of ftsResults) {
+        const key = r.summary?.slice(0, 80) || '';
+        if (key && !seenContent.has(key)) {
+          seenContent.add(key);
+          const dateLabel = r.timestamp ? new Date(r.timestamp).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+          supportParts.push(`[${dateLabel}] ${r.summary}`);
+        }
+      }
+    }
+  } catch { /* FTS best-effort */ }
+
+  // ── Layer 4: Assemble context ───────────────────────────────────────
+  let context = '';
+  if (factParts.length > 0) context += '## Known Facts\n' + factParts.slice(0, 15).join('\n') + '\n\n';
+  if (supportParts.length > 0) context += '## Supporting Context\n' + supportParts.slice(0, 10).join('\n---\n');
+  if (!context) context = '(No relevant memories found)';
 
   const prompt = buildPrompt(qa, context, speakerA, speakerB);
 
@@ -1059,7 +1192,6 @@ async function answerQuestion(
     maxTurns: 1,
   });
 
-  // Clean up answer
   return cleanAnswer(answer);
 }
 
