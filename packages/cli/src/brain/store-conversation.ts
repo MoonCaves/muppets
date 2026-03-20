@@ -19,7 +19,7 @@ import {
   linkEntitiesWithType,
 } from './entity-graph.js';
 import { extractRelationships } from './relationship-extractor.js';
-import { indexDocument, isChromaAvailable } from './embeddings.js';
+// NOTE: embeddings.js loaded lazily to avoid chromadb ONNX runtime OOM in long-running servers
 
 const logger = createLogger('brain');
 
@@ -251,8 +251,9 @@ export async function storeConversation(
           // Segment storage is best-effort
         }
 
-        // Store segment in ChromaDB (for semantic search)
+        // Store segment in ChromaDB (for semantic search, lazy-loaded)
         try {
+          const { isChromaAvailable, indexDocument } = await import('./embeddings.js');
           if (isChromaAvailable()) {
             await indexDocument(segId, seg.text, {
               type: 'conversation',
@@ -340,6 +341,7 @@ export async function storeConversation(
   // would double-index and waste memory/API calls.
   const hasSegments = fullText.length > 250;
   try {
+    const { isChromaAvailable, indexDocument } = await import('./embeddings.js');
     if (isChromaAvailable() && !hasSegments) {
       await indexDocument(conversationId, fullText, {
         type: 'conversation',

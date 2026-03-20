@@ -9,8 +9,11 @@
  */
 
 import { getTimelineDb } from './timeline.js';
-import { indexDocument, isChromaAvailable } from './embeddings.js';
 import { createLogger } from '../logger.js';
+
+// NOTE: embeddings.js is loaded LAZILY via dynamic import to avoid pulling
+// the chromadb npm package (and its 4GB ONNX runtime) into every process
+// that imports fact-store. This prevents OOM in long-running servers.
 
 const logger = createLogger('fact-store');
 
@@ -169,8 +172,9 @@ export async function storeFact(root: string, fact: FactInput): Promise<number> 
 
   const factId = result.lastInsertRowid as number;
 
-  // Index in ChromaDB for semantic search (best-effort)
+  // Index in ChromaDB for semantic search (best-effort, lazy-loaded)
   try {
+    const { isChromaAvailable, indexDocument } = await import('./embeddings.js');
     if (isChromaAvailable()) {
       const chromaId = `fact_${fact.source_path.replace(/[^a-zA-Z0-9]/g, '_')}`;
       await indexDocument(chromaId, fact.content, {
