@@ -19,6 +19,16 @@ export async function startTunnel(port: number): Promise<ServiceHandle> {
     throw new Error('ngrok is not installed. Install it from https://ngrok.com/download');
   }
 
+  // Kill any leftover ngrok processes from a previous crash
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('killall ngrok 2>/dev/null || true', { stdio: 'ignore' });
+    // Give ngrok a moment to release the endpoint
+    await new Promise(r => setTimeout(r, 1000));
+  } catch {
+    // Best-effort cleanup
+  }
+
   return new Promise((resolve, reject) => {
     const proc: ChildProcess = spawn('ngrok', ['http', String(port), '--log=stdout', '--log-format=json'], {
       stdio: ['ignore', 'pipe', 'pipe'],
