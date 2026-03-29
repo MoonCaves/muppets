@@ -19,7 +19,10 @@ import {
   linkEntitiesWithType,
 } from './entity-graph.js';
 import { extractRelationships } from './relationship-extractor.js';
-// NOTE: embeddings.js loaded lazily to avoid chromadb ONNX runtime OOM in long-running servers
+// NOTE: embeddings.js is NEVER imported in this module. The chromadb npm package
+// loads a ~4GB ONNX runtime that causes OOM in long-running server processes.
+// ChromaDB indexing happens only via explicit CLI commands (kyberbot search),
+// not during conversation ingestion. Facts are searchable via SQLite FTS.
 
 const logger = createLogger('brain');
 
@@ -251,23 +254,8 @@ export async function storeConversation(
           // Segment storage is best-effort
         }
 
-        // Store segment in ChromaDB (for semantic search, lazy-loaded)
-        try {
-          const { isChromaAvailable, indexDocument } = await import('./embeddings.js');
-          if (isChromaAvailable()) {
-            await indexDocument(segId, seg.text, {
-              type: 'conversation',
-              source_path: segPath,
-              title: fullTitle,
-              timestamp,
-              entities: entityNames,
-              topics: topicNames,
-              summary: seg.text, // full segment text, not truncated
-            });
-          }
-        } catch {
-          // Segment embedding is best-effort
-        }
+        // ChromaDB indexing removed from ingestion to prevent OOM in long-running servers.
+        // Facts are searchable via SQLite FTS. ChromaDB indexing can be done via kyberbot reindex.
       }
       logger.debug('Stored conversation segments', {
         conversationId,
@@ -335,28 +323,9 @@ export async function storeConversation(
     logger.warn('Entity graph storage failed', { error: String(err) });
   }
 
-  // ── Step 4: Embeddings (best-effort) ─────────────────────────────────
-  // Skip parent-level ChromaDB indexing if segments were created (Step 2b).
-  // Segments provide finer-grained embeddings; indexing the full text too
-  // would double-index and waste memory/API calls.
-  const hasSegments = fullText.length > 250;
-  try {
-    const { isChromaAvailable, indexDocument } = await import('./embeddings.js');
-    if (isChromaAvailable() && !hasSegments) {
-      await indexDocument(conversationId, fullText, {
-        type: 'conversation',
-        source_path: sourcePath,
-        title: `[${input.channel}] ${input.prompt.slice(0, 80)}`,
-        timestamp,
-        entities: entityNames,
-        topics: topicNames,
-        summary: input.response.slice(0, 300),
-      });
-      logger.debug('Indexed conversation in embeddings', { conversationId });
-    }
-  } catch (err) {
-    logger.warn('Embedding indexing failed', { error: String(err) });
-  }
+  // ChromaDB indexing removed from ingestion to prevent OOM in long-running servers.
+  // Conversations are searchable via timeline FTS + facts FTS + entity graph.
+  // ChromaDB semantic search is available via explicit CLI commands only.
 
   logger.info('Conversation stored', {
     conversationId,

@@ -10,7 +10,13 @@
 
 import { createLogger } from '../logger.js';
 import { getRoot } from '../config.js';
-import { semanticSearch, SearchResult } from './embeddings.js';
+// NOTE: embeddings.js loaded dynamically to avoid chromadb ONNX OOM in long-running servers
+interface SearchResult {
+  id: string;
+  content: string;
+  metadata: { type: string; source_path: string; title?: string; timestamp: string; entities?: string[]; topics?: string[]; summary?: string };
+  distance: number;
+}
 import { getTimelineDb } from './timeline.js';
 import { getSleepDb } from './sleep/db.js';
 import { getClaudeClient } from '../claude.js';
@@ -317,17 +323,22 @@ export async function hybridSearch(
   // Generate sub-queries for multi-hop retrieval
   const queries = expandQuery ? expandQueryTerms(query) : [query];
 
-  // ─── Channel 1: Semantic search ──────────────────────────────────────────
+  // ─── Channel 1: Semantic search (lazy-loaded to avoid chromadb OOM) ─────
   let semanticResults: SearchResult[] = [];
-  for (const q of queries) {
-    try {
-      const results = await semanticSearch(q, { limit: limit * 3, type });
-      semanticResults.push(...results);
-    } catch (err) {
-      if (q === query) {
-        logger.debug('Semantic search unavailable, using keyword only', { error: String(err) });
+  try {
+    const { semanticSearch } = await import('./embeddings.js');
+    for (const q of queries) {
+      try {
+        const results = await semanticSearch(q, { limit: limit * 3, type });
+        semanticResults.push(...results);
+      } catch (err) {
+        if (q === query) {
+          logger.debug('Semantic search unavailable, using keyword only', { error: String(err) });
+        }
       }
     }
+  } catch {
+    logger.debug('Embeddings module not available, using keyword search only');
   }
 
   // Deduplicate semantic results by source_path (keep best score)

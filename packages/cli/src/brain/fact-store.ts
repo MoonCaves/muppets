@@ -11,9 +11,9 @@
 import { getTimelineDb } from './timeline.js';
 import { createLogger } from '../logger.js';
 
-// NOTE: embeddings.js is loaded LAZILY via dynamic import to avoid pulling
-// the chromadb npm package (and its 4GB ONNX runtime) into every process
-// that imports fact-store. This prevents OOM in long-running servers.
+// NOTE: embeddings.js is NEVER imported here. The chromadb npm package loads
+// a ~4GB ONNX runtime that causes OOM in long-running servers. Facts are
+// searchable via SQLite FTS — no vector embeddings needed for fact retrieval.
 
 const logger = createLogger('fact-store');
 
@@ -172,24 +172,8 @@ export async function storeFact(root: string, fact: FactInput): Promise<number> 
 
   const factId = result.lastInsertRowid as number;
 
-  // Index in ChromaDB for semantic search (best-effort, lazy-loaded)
-  try {
-    const { isChromaAvailable, indexDocument } = await import('./embeddings.js');
-    if (isChromaAvailable()) {
-      const chromaId = `fact_${fact.source_path.replace(/[^a-zA-Z0-9]/g, '_')}`;
-      await indexDocument(chromaId, fact.content, {
-        type: 'note',
-        source_path: fact.source_path,
-        title: `[fact] ${fact.content.slice(0, 80)}`,
-        timestamp: fact.timestamp,
-        entities: fact.entities,
-        topics: [fact.category],
-        summary: fact.content,
-      });
-    }
-  } catch {
-    // Embedding is best-effort
-  }
+  // ChromaDB indexing removed from fact storage to prevent OOM in long-running servers.
+  // Facts are searchable via SQLite FTS. ChromaDB indexing can be done via kyberbot reindex.
 
   logger.debug('Stored fact', {
     id: factId,
