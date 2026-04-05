@@ -13,7 +13,7 @@ import AgentsView from './components/agents/AgentsView';
 import ChannelsView from './components/channels/ChannelsView';
 import HeartbeatView from './components/heartbeat/HeartbeatView';
 import SettingsView from './components/settings/SettingsView';
-import PlaceholderView from './components/shared/PlaceholderView';
+import BrainView from './components/brain/BrainView';
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
@@ -59,7 +59,7 @@ function AppContent() {
         {activeTab === 'agents' && <AgentsView />}
         {activeTab === 'channels' && <ChannelsView />}
         {activeTab === 'heartbeat' && <HeartbeatView />}
-        {activeTab === 'brain' && <PlaceholderView title="Brain" description="Phase H — p5.js canvas + entity browser" />}
+        {activeTab === 'brain' && <BrainView />}
         {activeTab === 'settings' && <SettingsView />}
       </div>
     </div>
