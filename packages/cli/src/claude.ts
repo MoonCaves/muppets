@@ -49,23 +49,16 @@ export class ClaudeClient {
     const configMode = getClaudeMode();
 
     if (configMode === 'agent-sdk') {
-      this.mode = 'agent-sdk';
-      // Verify Agent SDK is loadable; fall back to subprocess if not
-      this.verifyAgentSDK();
+      // All callers use subprocess: true, so don't load the Agent SDK
+      // into the long-lived server process — it leaks hundreds of MB.
+      // The SDK is only needed for in-process query() calls, which we
+      // no longer make. Subprocess mode spawns `claude -p` instead.
+      this.mode = 'subprocess';
+      logger.debug('Using subprocess mode (agent-sdk disabled for memory safety)');
     } else if (configMode === 'sdk') {
       this.mode = 'sdk';
       this.initSDK();
     } else {
-      this.mode = 'subprocess';
-    }
-  }
-
-  private async verifyAgentSDK(): Promise<void> {
-    try {
-      await import('@anthropic-ai/claude-code');
-      logger.debug('Agent SDK available');
-    } catch {
-      logger.warn('Agent SDK (@anthropic-ai/claude-code) not available, falling back to subprocess mode');
       this.mode = 'subprocess';
     }
   }
@@ -90,16 +83,9 @@ export class ClaudeClient {
       opts.model = (getClaudeModel() || 'opus') as 'haiku' | 'sonnet' | 'opus';
     }
 
-    // Force subprocess mode for background/brain operations to prevent
-    // heap accumulation from in-process Agent SDK calls
-    if (opts.subprocess) {
-      return this.completeSubprocess(prompt, opts);
-    }
-
-    if (this.mode === 'agent-sdk') {
-      return this.completeAgentSDK(prompt, opts);
-    }
-    if (this.mode === 'sdk' && this.sdk) {
+    // All server-process calls should use subprocess for memory isolation.
+    // SDK mode is only for direct API calls (ANTHROPIC_API_KEY users).
+    if (this.mode === 'sdk' && this.sdk && !opts.subprocess) {
       return this.completeSDK(prompt, opts.model, opts);
     }
     return this.completeSubprocess(prompt, opts);
@@ -111,13 +97,6 @@ export class ClaudeClient {
   async chat(messages: Message[], system: string): Promise<string> {
     const model = (getClaudeModel() || 'opus') as 'haiku' | 'sonnet' | 'opus';
 
-    if (this.mode === 'agent-sdk') {
-      // Flatten messages into a prompt with history for Agent SDK
-      const historyPrompt = messages
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-        .join('\n\n');
-      return this.completeAgentSDK(historyPrompt, { system, model });
-    }
     if (this.mode === 'sdk' && this.sdk) {
       return this.chatSDK(messages, system, model);
     }
@@ -127,61 +106,6 @@ export class ClaudeClient {
       .join('\n\n');
     const fullPrompt = `${system}\n\n${historyPrompt}`;
     return this.completeSubprocess(fullPrompt, { model });
-  }
-
-  private async completeAgentSDK(prompt: string, opts: CompleteOptions): Promise<string> {
-    try {
-      const { query } = await import('@anthropic-ai/claude-code');
-      let root: string;
-      try {
-        root = getRoot();
-      } catch {
-        root = process.cwd();
-      }
-
-      const response = query({
-        prompt,
-        options: {
-          cwd: root,
-          maxTurns: opts.maxTurns ?? 10,
-          ...(opts.model ? { model: opts.model } : {}),
-          ...(opts.system ? { customSystemPrompt: opts.system } : {}),
-          permissionMode: 'bypassPermissions',
-        },
-      });
-
-      // Collect all assistant text blocks as fallback
-      let lastAssistantText = '';
-      for await (const message of response) {
-        if (message.type === 'assistant') {
-          const content = (message as any).message?.content;
-          if (Array.isArray(content)) {
-            const text = content
-              .filter((b: any) => b.type === 'text')
-              .map((b: any) => b.text)
-              .join('');
-            if (text) lastAssistantText = text;
-          }
-        } else if (message.type === 'result') {
-          const resultMsg = message as any;
-          if (resultMsg.subtype === 'success') {
-            // result field is the authoritative final text
-            if (resultMsg.result) return resultMsg.result;
-            // Agent may have done tool-only work (e.g. file edits) with no text reply
-            logger.debug('Agent SDK returned success with empty result');
-          } else {
-            logger.warn(`Agent SDK error: ${resultMsg.subtype}`);
-          }
-        }
-      }
-
-      return lastAssistantText;
-    } catch (err) {
-      // Agent SDK failed (e.g. nested invocation, version mismatch) — fall back to subprocess
-      const errMsg = err instanceof Error ? err.message : String(err);
-      logger.debug(`Agent SDK unavailable, using subprocess: ${errMsg}`);
-      return this.completeSubprocess(prompt, opts);
-    }
   }
 
   private async completeSDK(
@@ -250,16 +174,26 @@ export class ClaudeClient {
 
       const chunks: Buffer[] = [];
       const errChunks: Buffer[] = [];
+      let stdoutBytes = 0;
+      const MAX_STDOUT = 2 * 1024 * 1024; // 2MB cap — subprocess responses should be small
 
-      proc.stdout.on('data', (data: Buffer) => { chunks.push(data); });
+      proc.stdout.on('data', (data: Buffer) => {
+        stdoutBytes += data.length;
+        if (stdoutBytes <= MAX_STDOUT) {
+          chunks.push(data);
+        } else if (chunks.length > 0 && stdoutBytes - data.length <= MAX_STDOUT) {
+          logger.warn(`Subprocess stdout exceeded ${MAX_STDOUT / 1024 / 1024}MB, truncating`);
+        }
+      });
       proc.stderr.on('data', (data: Buffer) => { errChunks.push(data); });
 
       proc.on('close', (code) => {
         const stdout = Buffer.concat(chunks).toString().trim();
         const stderr = Buffer.concat(errChunks).toString();
-        // Clear references to let GC reclaim buffers
+        // Clear references immediately to let GC reclaim buffers
         chunks.length = 0;
         errChunks.length = 0;
+        stdoutBytes = 0;
 
         if (code === 0) {
           resolve(stdout);
