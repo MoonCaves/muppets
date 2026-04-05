@@ -83,17 +83,24 @@ export async function executeHandler(req: Request, res: Response) {
     proc.stdin.end();
   }
 
-  // Stream stdout as NDJSON log lines
+  // Stream stdout — respect backpressure to prevent OOM from slow clients
   proc.stdout?.on('data', (chunk: Buffer) => {
     const text = chunk.toString();
-    // Always stream to client (they handle their own buffering)
-    sendLine(res, { type: 'log', stream: 'stdout', chunk: text });
     // Only accumulate for final parsing up to the cap
     if (!stdoutCapped) {
       stdout += text;
       if (stdout.length > MAX_STDOUT_BYTES) {
         stdoutCapped = true;
         logger.warn('Execute stdout exceeded 5MB, stopping accumulation for final parse');
+      }
+    }
+    // Stream to client but skip raw stdout if backpressured
+    if (!res.writableEnded) {
+      const ok = res.write(JSON.stringify({ type: 'log', stream: 'stdout', chunk: text, ts: new Date().toISOString() }) + '\n');
+      if (!ok) {
+        // Response buffer is full — pause reading from subprocess until drained
+        proc.stdout?.pause();
+        res.once('drain', () => { proc.stdout?.resume(); });
       }
     }
   });

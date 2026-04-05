@@ -177,12 +177,17 @@ export class ClaudeClient {
       let stdoutBytes = 0;
       const MAX_STDOUT = 2 * 1024 * 1024; // 2MB cap — subprocess responses should be small
 
+      let stdoutDestroyed = false;
       proc.stdout.on('data', (data: Buffer) => {
         stdoutBytes += data.length;
         if (stdoutBytes <= MAX_STDOUT) {
           chunks.push(data);
-        } else if (chunks.length > 0 && stdoutBytes - data.length <= MAX_STDOUT) {
-          logger.warn(`Subprocess stdout exceeded ${MAX_STDOUT / 1024 / 1024}MB, truncating`);
+        } else if (!stdoutDestroyed) {
+          // Destroy the read stream to stop reading entirely.
+          // Without this, rapid data arrival floods GC with temporary Buffers.
+          stdoutDestroyed = true;
+          proc.stdout.destroy();
+          logger.warn(`Subprocess stdout exceeded ${MAX_STDOUT / 1024 / 1024}MB — stream destroyed`);
         }
       });
       proc.stderr.on('data', (data: Buffer) => { errChunks.push(data); });
