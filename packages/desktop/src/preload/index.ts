@@ -27,6 +27,11 @@ const api = {
       ipcRenderer.on(IPC.SERVICES_HEALTH_UPDATE, handler);
       return () => ipcRenderer.removeListener(IPC.SERVICES_HEALTH_UPDATE, handler);
     },
+    onStatusChange: (callback: (status: string) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: string) => callback(status);
+      ipcRenderer.on('services:status-change', handler);
+      return () => ipcRenderer.removeListener('services:status-change', handler);
+    },
   },
 
   config: {

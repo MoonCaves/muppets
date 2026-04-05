@@ -62,7 +62,7 @@ export function setupIpcHandlers(
 
   // Domain handlers
   registerPrerequisiteHandlers(store);
-  registerServiceHandlers(lifecycle);
+  registerServiceHandlers(lifecycle, getMainWindow);
   registerConfigHandlers(store);
   registerLogHandlers(lifecycle, getMainWindow);
   registerOnboardingHandlers(store);

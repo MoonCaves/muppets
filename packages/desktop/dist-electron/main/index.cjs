@@ -1,9 +1,9 @@
 "use strict";
 const electron = require("electron");
 const path = require("path");
-const fs = require("fs");
 const dotenv = require("dotenv");
 const child_process = require("child_process");
+const fs = require("fs");
 const yaml = require("js-yaml");
 const events = require("events");
 const electronUpdater = require("electron-updater");
@@ -85,20 +85,26 @@ function checkAgentRoot(store2) {
   const hasIdentity = fs.existsSync(path.join(path$1, "identity.yaml"));
   return { configured: true, path: path$1, hasIdentity };
 }
-function registerServiceHandlers(lifecycle2) {
+function registerServiceHandlers(lifecycle2, getMainWindow) {
   electron.ipcMain.handle(IPC.SERVICES_START, async () => {
     await lifecycle2.startCli();
-    return { ok: true };
+    return { ok: true, status: lifecycle2.status };
   });
   electron.ipcMain.handle(IPC.SERVICES_STOP, async () => {
     await lifecycle2.stopCli();
-    return { ok: true };
+    return { ok: true, status: lifecycle2.status };
   });
   electron.ipcMain.handle(IPC.SERVICES_STATUS, () => {
     return {
       status: lifecycle2.status,
       health: lifecycle2.getHealth()
     };
+  });
+  lifecycle2.on("status-change", (status) => {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("services:status-change", status);
+    }
   });
 }
 function registerConfigHandlers(store2) {
@@ -318,7 +324,7 @@ function setupIpcHandlers(lifecycle2, store2, getMainWindow) {
     electron.BrowserWindow.fromWebContents(event.sender)?.close();
   });
   registerPrerequisiteHandlers(store2);
-  registerServiceHandlers(lifecycle2);
+  registerServiceHandlers(lifecycle2, getMainWindow);
   registerConfigHandlers(store2);
   registerLogHandlers(lifecycle2, getMainWindow);
   registerOnboardingHandlers(store2);
@@ -334,6 +340,8 @@ class LifecycleManager extends events.EventEmitter {
   MAX_BUFFER_LINES = 1e3;
   restartCount = 0;
   MAX_RESTARTS = 10;
+  attached = false;
+  // true if we attached to an external server (don't kill on quit)
   constructor(store2) {
     super();
     this.store = store2;
@@ -358,6 +366,7 @@ class LifecycleManager extends events.EventEmitter {
       if (res.ok) {
         console.log("[lifecycle] Server already running on port", port, "— attaching");
         this._status = "running";
+        this.attached = true;
         this.emit("status-change", this._status);
         this.startHealthPolling();
         return;
@@ -368,10 +377,19 @@ class LifecycleManager extends events.EventEmitter {
     this.spawnProcess();
   }
   async stopCli() {
-    if (!this.process) return;
+    this.stopHealthPolling();
+    if (!this.process) {
+      if (this.attached) {
+        console.log("[lifecycle] Detaching from external server (not killing)");
+        this._status = "stopped";
+        this.attached = false;
+        this.emit("status-change", this._status);
+      }
+      return;
+    }
     this._status = "stopping";
     this.emit("status-change", this._status);
-    this.stopHealthPolling();
+    console.log("[lifecycle] Sending SIGTERM to CLI process...");
     this.process.kill("SIGTERM");
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
@@ -757,9 +775,6 @@ electron.app.whenReady().then(async () => {
     }
     updateTrayStatus(health.status);
   });
-  if (agentRoot && fs.existsSync(path.join(agentRoot, "identity.yaml"))) {
-    await lifecycle.startCli();
-  }
   electron.app.on("activate", () => {
     if (mainWindow) {
       mainWindow.show();
@@ -771,10 +786,18 @@ electron.app.whenReady().then(async () => {
 });
 electron.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
+    electron.app.isQuitting = true;
     lifecycle.stopCli().then(() => electron.app.quit());
   }
 });
-electron.app.on("before-quit", () => {
+electron.app.on("before-quit", async (e) => {
+  if (electron.app.isQuitting) return;
   electron.app.isQuitting = true;
-  lifecycle.stopCli();
+  if (lifecycle.isRunning()) {
+    e.preventDefault();
+    console.log("[app] Shutting down CLI services...");
+    await lifecycle.stopCli();
+    console.log("[app] CLI stopped, quitting");
+    electron.app.quit();
+  }
 });

@@ -43,6 +43,11 @@ const api = {
       const handler = (_event, health) => callback(health);
       electron.ipcRenderer.on(IPC.SERVICES_HEALTH_UPDATE, handler);
       return () => electron.ipcRenderer.removeListener(IPC.SERVICES_HEALTH_UPDATE, handler);
+    },
+    onStatusChange: (callback) => {
+      const handler = (_event, status) => callback(status);
+      electron.ipcRenderer.on("services:status-change", handler);
+      return () => electron.ipcRenderer.removeListener("services:status-change", handler);
     }
   },
   config: {

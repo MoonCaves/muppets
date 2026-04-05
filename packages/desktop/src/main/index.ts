@@ -128,10 +128,7 @@ app.whenReady().then(async () => {
     updateTrayStatus(health.status);
   });
 
-  // Auto-start CLI if agent root is configured
-  if (agentRoot && existsSync(join(agentRoot, 'identity.yaml'))) {
-    await lifecycle.startCli();
-  }
+  // Don't auto-start — user starts manually via the Start button on the dashboard
 
   app.on('activate', () => {
     if (mainWindow) {

@@ -1,8 +1,8 @@
 /**
- * App-wide context: API token, server URL, health state, agent root.
+ * App-wide context: API token, server URL, health state, agent root, logs.
  */
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react';
 import type { HealthData } from '../../types/ipc';
 
 interface AppContextValue {
@@ -11,7 +11,8 @@ interface AppContextValue {
   serverUrl: string;
   health: HealthData | null;
   cliStatus: string;
-  isReady: boolean; // true once config is loaded
+  isReady: boolean;
+  logs: string[];
 }
 
 const AppContext = createContext<AppContextValue>({
@@ -21,6 +22,7 @@ const AppContext = createContext<AppContextValue>({
   health: null,
   cliStatus: 'stopped',
   isReady: false,
+  logs: [],
 });
 
 export function useApp(): AppContextValue {
@@ -34,13 +36,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [cliStatus, setCliStatus] = useState('stopped');
   const [isReady, setIsReady] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
 
   useEffect(() => {
+    const kb = (window as any).kyberbot;
+    if (!kb) return;
+
     // Load config on mount
     const init = async () => {
-      const kb = (window as any).kyberbot;
-      if (!kb) return;
-
       const root = await kb.config.getAgentRoot();
       setAgentRoot(root);
 
@@ -53,30 +56,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setServerUrl(url);
       }
 
-      // Get initial status
       const { status, health: h } = await kb.services.getStatus();
       setCliStatus(status);
       if (h) setHealth(h);
-
       setIsReady(true);
     };
-
     init();
 
     // Subscribe to health updates
-    const kb = (window as any).kyberbot;
-    if (!kb) return;
-
-    const unsubscribe = kb.services.onHealthUpdate((h: HealthData) => {
+    const unsubHealth = kb.services.onHealthUpdate((h: HealthData) => {
       setHealth(h);
       if (h.status !== 'offline') setCliStatus('running');
+      else setCliStatus('stopped');
     });
 
-    return unsubscribe;
+    // Subscribe to status changes (start/stop/crash)
+    const unsubStatus = kb.services.onStatusChange((status: string) => {
+      setCliStatus(status);
+      if (status === 'stopped' || status === 'crashed') {
+        setHealth(null);
+      }
+    });
+
+    // Subscribe to logs (persistent for entire session)
+    const unsubLogs = kb.logs.onLine((line: string) => {
+      setLogs(prev => {
+        const next = [...prev, line];
+        return next.length > 2000 ? next.slice(-2000) : next;
+      });
+    });
+
+    return () => {
+      unsubHealth();
+      unsubStatus();
+      unsubLogs();
+    };
   }, []);
 
   return (
-    <AppContext.Provider value={{ agentRoot, apiToken, serverUrl, health, cliStatus, isReady }}>
+    <AppContext.Provider value={{ agentRoot, apiToken, serverUrl, health, cliStatus, isReady, logs }}>
       {children}
     </AppContext.Provider>
   );
