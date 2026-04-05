@@ -425,8 +425,10 @@ class LifecycleManager extends events.EventEmitter {
         KYBERBOT_CHILD: "1",
         // Disables CLI's built-in watchdog (run.ts:64)
         NODE_ENV: "production",
-        PATH: process.env.PATH
+        PATH: process.env.PATH,
         // Ensure node is on PATH for the shebang
+        FORCE_COLOR: "3"
+        // Force chalk to output full 24-bit ANSI color codes even when piped
       },
       stdio: ["ignore", "pipe", "pipe"],
       shell: false
