@@ -15,15 +15,18 @@ html {
   -webkit-font-smoothing: antialiased;
 }
 
-html, body, #root {
+html, body {
   height: 100%;
   width: 100%;
   overflow: hidden;
 }
 
-/* Ensure flex children can scroll */
-.min-h-0 { min-height: 0; }
-.overflow-y-auto { overflow-y: auto !important; }
+#root {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
 
 body {
   font-family: var(--font-mono);
@@ -32,6 +35,12 @@ body {
   color: var(--fg-primary);
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Allow text selection in inputs and textareas */
+input, textarea, pre, code, [contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Section labels */
@@ -102,4 +111,13 @@ button, input, select, textarea, a, [role="button"] {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/*
+ * Flex scrolling fix: in a flex column, children with overflow-y-auto
+ * only scroll if they have min-height: 0 on themselves or their parent.
+ * These utilities ensure scrolling works inside flex layouts.
+ */
+.flex-1 {
+  min-height: 0;
 }

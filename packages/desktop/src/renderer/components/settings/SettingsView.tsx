@@ -55,7 +55,7 @@ export default function SettingsView() {
   const btnStyle = (color: string) => ({ fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase' as const, borderColor: color, color, background: 'transparent', cursor: saving ? 'default' as const : 'pointer' as const, opacity: saving ? 0.5 : 1, border: '1px solid', padding: '4px 12px' });
 
   return (
-    <div className="h-full overflow-y-auto p-4" style={{ background: 'var(--bg-primary)', overflowY: 'auto' }}>
+    <div style={{ height: '100%', overflowY: 'auto', padding: '16px', background: 'var(--bg-primary)' }}>
       {message && <div className="mb-3 p-2 text-[11px] border" style={{ fontFamily: 'var(--font-mono)', borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)' }}>{message}</div>}
 
       {/* Identity */}

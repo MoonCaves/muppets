@@ -210,7 +210,7 @@ export default function ChatView() {
   };
 
   return (
-    <div className="h-full flex" style={{ background: 'var(--bg-primary)' }}>
+    <div style={{ height: '100%', display: 'flex', background: 'var(--bg-primary)' }}>
       {/* Main chat area */}
       <div className="flex-1 flex flex-col border-r" style={{ borderColor: 'var(--border-color)' }}>
         {/* Chat header */}

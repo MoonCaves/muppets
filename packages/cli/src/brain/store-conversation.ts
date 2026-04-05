@@ -176,11 +176,13 @@ export async function storeConversation(
   const sourceType = channelToSourceType(input.channel);
   const sourceConfidence = SOURCE_CONFIDENCE[sourceType] ?? 0.85;
 
-  logger.debug('Storing conversation', {
+  const heapMB = () => Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+  logger.info('storeConversation:start', {
     channel: input.channel,
     conversationId,
     promptLength: input.prompt.length,
     responseLength: input.response.length,
+    heapMB: heapMB(),
   });
 
   // ── Step 1: Extract entities and relationships via Haiku ──────────────
@@ -194,13 +196,11 @@ export async function storeConversation(
   }> = [];
 
   try {
+    logger.info('storeConversation:extractRelationships:before', { heapMB: heapMB() });
     const extraction = await extractRelationships(fullText);
+    logger.info('storeConversation:extractRelationships:after', { heapMB: heapMB() });
     entities = extraction.entities;
     relationships = extraction.relationships;
-    logger.debug('Extracted from conversation', {
-      entities: entities.length,
-      relationships: relationships.length,
-    });
   } catch (err) {
     logger.warn('Entity extraction failed', { error: String(err) });
   }
@@ -229,6 +229,7 @@ export async function storeConversation(
     .filter((e) => e.type === 'topic')
     .map((e) => e.name);
 
+  logger.info('storeConversation:timeline:before', { heapMB: heapMB() });
   // ── Step 2: Timeline ─────────────────────────────────────────────────
   const title = input.prompt.length > 100
     ? input.prompt.slice(0, 97) + '...'
@@ -273,6 +274,7 @@ export async function storeConversation(
     logger.warn('Timeline storage failed', { error: String(err) });
   }
 
+  logger.info('storeConversation:segments:before', { heapMB: heapMB() });
   // ── Step 2b: Segment-level indexing for fine-grained retrieval ────
   try {
     const segments = segmentText(fullText, 250, 50);
@@ -317,6 +319,7 @@ export async function storeConversation(
     logger.warn('Segment storage failed', { error: String(err) });
   }
 
+  logger.info('storeConversation:entityGraph:before', { heapMB: heapMB() });
   // ── Step 3: Entity Graph ─────────────────────────────────────────────
   try {
     // Create entities and add mentions
@@ -376,6 +379,7 @@ export async function storeConversation(
     logger.warn('Entity graph storage failed', { error: String(err) });
   }
 
+  logger.info('storeConversation:factExtraction:before', { heapMB: heapMB() });
   // ── Step 3b: Real-time fact extraction (best-effort) ─────────────────
   try {
     await extractFactsRealtime(
@@ -385,6 +389,7 @@ export async function storeConversation(
     // Fact extraction is best-effort — never blocks conversation storage
   }
 
+  logger.info('storeConversation:embeddings:before', { heapMB: heapMB() });
   // ── Step 4: Embeddings (best-effort) ─────────────────────────────────
   // Skip parent-level ChromaDB indexing if segments were created (Step 2b).
   const hasSegments = fullText.length > 250;
