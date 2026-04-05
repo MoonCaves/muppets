@@ -117,10 +117,18 @@ export default function BrainView() {
 
 // ── Brain Notes ──
 
+const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
+  brain: { label: 'BRAIN NOTE', color: 'var(--accent-emerald)' },
+  'claude-memory': { label: 'CLAUDE CODE MEMORY', color: 'var(--accent-violet)' },
+  'claude-sync': { label: 'MEMORY SYNC', color: 'var(--accent-cyan)' },
+  identity: { label: 'IDENTITY', color: 'var(--accent-amber)' },
+};
+
 function BrainNotesView({ serverUrl, apiToken }: { serverUrl: string; apiToken: string | null }) {
   const [notes, setNotes] = useState<any[]>([]);
   const [selectedNote, setSelectedNote] = useState<{ name: string; content: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<string | null>(null);
 
   useEffect(() => {
     manageFetch<{ notes: any[] }>(serverUrl, apiToken, '/brain-notes')
@@ -129,12 +137,18 @@ function BrainNotesView({ serverUrl, apiToken }: { serverUrl: string; apiToken: 
       .finally(() => setLoading(false));
   }, [serverUrl, apiToken]);
 
-  const openNote = async (name: string) => {
+  const openNote = async (path: string) => {
     try {
-      const data = await manageFetch<{ name: string; content: string }>(serverUrl, apiToken, `/brain-notes/${encodeURIComponent(name)}`);
+      const data = await manageFetch<{ name: string; content: string }>(serverUrl, apiToken, '/brain-notes/read', {
+        method: 'POST',
+        body: JSON.stringify({ path }),
+      });
       setSelectedNote(data);
     } catch {}
   };
+
+  const filtered = filter ? notes.filter(n => n.source === filter) : notes;
+  const sources = [...new Set(notes.map(n => n.source))];
 
   if (selectedNote) {
     return (
@@ -152,24 +166,41 @@ function BrainNotesView({ serverUrl, apiToken }: { serverUrl: string; apiToken: 
 
   return (
     <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflowY: 'auto', padding: '16px' }}>
-      <span className="section-title" style={{ color: 'var(--accent-emerald)' }}>{'// BRAIN NOTES'}</span>
-      <p style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: '4px', marginBottom: '16px' }}>
-        Long-form knowledge, research findings, and reference material stored in brain/
+      <span className="section-title" style={{ color: 'var(--accent-emerald)' }}>{'// ALL MEMORY FILES'}</span>
+      <p style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginTop: '4px', marginBottom: '12px' }}>
+        {notes.length} files across brain notes, Claude Code memory, identity files, and memory sync
       </p>
+
+      {/* Source filter buttons */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        <button onClick={() => setFilter(null)} style={{ padding: '2px 8px', fontSize: '8px', letterSpacing: '0.5px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', border: `1px solid ${!filter ? 'var(--accent-emerald)' : 'var(--border-color)'}`, color: !filter ? 'var(--accent-emerald)' : 'var(--fg-muted)', background: !filter ? 'rgba(16,185,129,0.1)' : 'transparent', cursor: 'pointer' }}>All ({notes.length})</button>
+        {sources.map(src => {
+          const meta = SOURCE_LABELS[src] || { label: src, color: 'var(--fg-muted)' };
+          const count = notes.filter(n => n.source === src).length;
+          return (
+            <button key={src} onClick={() => setFilter(filter === src ? null : src)} style={{ padding: '2px 8px', fontSize: '8px', letterSpacing: '0.5px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', border: `1px solid ${filter === src ? meta.color : 'var(--border-color)'}`, color: filter === src ? meta.color : 'var(--fg-muted)', background: filter === src ? `${meta.color}15` : 'transparent', cursor: 'pointer' }}>{meta.label} ({count})</button>
+          );
+        })}
+      </div>
+
       {loading && <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Loading...</span>}
-      {notes.length === 0 && !loading && <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>No brain notes yet</span>}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {notes.map(note => (
-          <div key={note.name} onClick={() => openNote(note.name)} style={{ padding: '12px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', cursor: 'pointer' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-              <span style={{ fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)' }}>{note.name}</span>
-              <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{(note.size / 1024).toFixed(1)}KB</span>
+      {filtered.length === 0 && !loading && <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>No files in this category</span>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {filtered.map(note => {
+          const meta = SOURCE_LABELS[note.source] || { label: note.source, color: 'var(--fg-muted)' };
+          return (
+            <div key={note.path} onClick={() => openNote(note.path)} style={{ padding: '10px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', cursor: 'pointer' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <span style={{ fontSize: '8px', padding: '1px 4px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', color: meta.color, background: `${meta.color}15`, border: `1px solid ${meta.color}30` }}>{meta.label}</span>
+                <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)', flex: 1 }}>{note.name}</span>
+                <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{(note.size / 1024).toFixed(1)}KB</span>
+              </div>
+              <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+                {new Date(note.lastModified).toLocaleString()}
+              </span>
             </div>
-            <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-              Modified: {new Date(note.lastModified).toLocaleString()}
-            </span>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

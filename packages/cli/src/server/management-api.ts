@@ -607,45 +607,72 @@ export function createManagementRouter(channels: Channel[]): Router {
     }
   });
 
-  // GET /brain-notes — List all brain note files
+  // GET /brain-notes — List all memory files across all storage locations
   router.get('/brain-notes', (_req, res) => {
     try {
       const root = getRoot();
-      const brainDir = join(root, 'brain');
-      if (!existsSync(brainDir)) {
-        res.json({ notes: [] });
-        return;
+      const allNotes: any[] = [];
+
+      // Helper to scan a directory for .md files
+      const scanDir = (dir: string, source: string) => {
+        if (!existsSync(dir)) return;
+        const files = readdirSync(dir).filter(f => f.endsWith('.md'));
+        for (const f of files) {
+          const filePath = join(dir, f);
+          try {
+            const stat = statSync(filePath);
+            allNotes.push({
+              name: f,
+              path: filePath,
+              size: stat.size,
+              lastModified: stat.mtime.toISOString(),
+              source,
+            });
+          } catch { /* skip unreadable files */ }
+        }
+      };
+
+      // 1. brain/ directory (brain notes)
+      scanDir(join(root, 'brain'), 'brain');
+
+      // 2. Claude Code project memory files
+      const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+      const claudeMemoryDir = join(homeDir, '.claude', 'projects', `-Users-${process.env.USER || 'user'}-${root.split('/').pop()}`, 'memory');
+      scanDir(claudeMemoryDir, 'claude-memory');
+
+      // 3. data/claude-memory/ synced files
+      scanDir(join(root, 'data', 'claude-memory'), 'claude-sync');
+
+      // 4. Root markdown files (SOUL.md, USER.md, HEARTBEAT.md)
+      for (const f of ['SOUL.md', 'USER.md', 'HEARTBEAT.md']) {
+        const filePath = join(root, f);
+        if (existsSync(filePath)) {
+          const stat = statSync(filePath);
+          allNotes.push({ name: f, path: filePath, size: stat.size, lastModified: stat.mtime.toISOString(), source: 'identity' });
+        }
       }
-      const files = readdirSync(brainDir).filter(f => f.endsWith('.md'));
-      const notes = files.map(f => {
-        const filePath = join(brainDir, f);
-        const stat = statSync(filePath);
-        return {
-          name: f,
-          path: filePath,
-          size: stat.size,
-          lastModified: stat.mtime.toISOString(),
-        };
-      });
-      res.json({ notes });
+
+      // Sort by lastModified descending
+      allNotes.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
+
+      res.json({ notes: allNotes });
     } catch (err) {
       logger.error('Failed to list brain notes', { error: String(err) });
       res.status(500).json({ error: 'Failed to list brain notes' });
     }
   });
 
-  // GET /brain-notes/:name — Read a brain note file
-  router.get('/brain-notes/:name', (req, res) => {
+  // POST /brain-notes/read — Read a note file by full path
+  router.post('/brain-notes/read', (req, res) => {
     try {
-      const root = getRoot();
-      const filePath = join(root, 'brain', req.params.name as string);
-      if (!existsSync(filePath)) {
+      const { path: filePath } = req.body;
+      if (!filePath || !existsSync(filePath)) {
         res.status(404).json({ error: 'Note not found' });
         return;
       }
       const content = readFileSync(filePath, 'utf-8');
       const stat = statSync(filePath);
-      res.json({ name: req.params.name, content, lastModified: stat.mtime.toISOString() });
+      res.json({ name: filePath.split('/').pop(), content, lastModified: stat.mtime.toISOString() });
     } catch (err) {
       logger.error('Failed to read brain note', { error: String(err) });
       res.status(500).json({ error: 'Failed to read brain note' });
