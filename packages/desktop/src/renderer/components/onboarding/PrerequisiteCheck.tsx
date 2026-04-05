@@ -20,7 +20,7 @@ export default function PrerequisiteCheck({ onPassed }: PrerequisiteCheckProps) 
     const check = async () => {
       const s = await kb.prerequisites.check();
       setStatus(s);
-      if (s.docker.installed && s.docker.running && s.claude.installed) {
+      if (s.docker.installed && s.docker.running && s.claude.installed && s.kyberbot.installed) {
         onPassed();
       }
     };
@@ -31,6 +31,13 @@ export default function PrerequisiteCheck({ onPassed }: PrerequisiteCheckProps) 
   }, [onPassed]);
 
   const items = [
+    {
+      label: 'KyberBot CLI',
+      ok: status?.kyberbot?.installed,
+      installed: status?.kyberbot?.installed,
+      version: status?.kyberbot?.version,
+      help: 'Install with: npm install -g @kyberbot/cli',
+    },
     {
       label: 'Docker Desktop',
       ok: status?.docker.installed && status?.docker.running,

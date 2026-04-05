@@ -43,6 +43,7 @@ export const IPC = {
 export interface PrerequisiteStatus {
   docker: { installed: boolean; running: boolean; version: string | null };
   claude: { installed: boolean; version: string | null };
+  kyberbot: { installed: boolean; version: string | null };
   agentRoot: { configured: boolean; path: string | null; hasIdentity: boolean };
 }
 

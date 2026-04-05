@@ -128,6 +128,7 @@ export class LifecycleManager extends EventEmitter {
     this.logStream = createWriteStream(logPath, { flags: 'a' });
 
     // Spawn kyberbot directly (it has its own shebang with node + max-old-space-size)
+    const fullPath = this.getFullPath();
     this.process = spawn(cliPath, ['run'], {
       cwd: agentRoot,
       env: {
@@ -135,7 +136,7 @@ export class LifecycleManager extends EventEmitter {
         KYBERBOT_ROOT: agentRoot,
         KYBERBOT_CHILD: '1', // Disables CLI's built-in watchdog (run.ts:64)
         NODE_ENV: 'production',
-        PATH: process.env.PATH, // Ensure node is on PATH for the shebang
+        PATH: fullPath, // Full PATH including nvm/homebrew for packaged app
         FORCE_COLOR: '3', // Force chalk to output full 24-bit ANSI color codes even when piped
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -251,17 +252,75 @@ export class LifecycleManager extends EventEmitter {
     }
   }
 
-  private resolveCliPath(): string {
-    // Check global install
+  /**
+   * Build a full PATH that includes common Node/nvm/homebrew locations.
+   * Electron's packaged app doesn't inherit the user's shell PATH.
+   */
+  private getFullPath(): string {
+    const home = process.env.HOME || '';
+    const existing = process.env.PATH || '';
+    const extras = [
+      join(home, '.nvm/versions/node', '**', 'bin'), // placeholder
+      join(home, '.nvm/versions/node'),
+      '/usr/local/bin',
+      '/opt/homebrew/bin',
+      join(home, '.npm-global/bin'),
+      join(home, '.yarn/bin'),
+      '/usr/bin',
+      '/bin',
+    ];
+
+    // Find actual nvm node version dirs
+    const nvmDir = join(home, '.nvm/versions/node');
+    const nvmPaths: string[] = [];
     try {
-      const globalPath = execSync('which kyberbot', { encoding: 'utf-8' }).trim();
+      const versions = require('fs').readdirSync(nvmDir);
+      for (const v of versions) {
+        nvmPaths.push(join(nvmDir, v, 'bin'));
+      }
+    } catch { /* nvm not installed */ }
+
+    const allPaths = [...nvmPaths, ...extras, ...existing.split(':')];
+    return [...new Set(allPaths)].join(':');
+  }
+
+  private resolveCliPath(): string {
+    const fullPath = this.getFullPath();
+
+    // Try `which kyberbot` with full PATH
+    try {
+      const globalPath = execSync('which kyberbot', {
+        encoding: 'utf-8',
+        env: { ...process.env, PATH: fullPath },
+      }).trim();
       if (globalPath) return globalPath;
     } catch { /* not found */ }
 
+    // Check common global install locations directly
+    const home = process.env.HOME || '';
+    const candidates = [
+      // nvm installs
+      ...(() => {
+        try {
+          const nvmDir = join(home, '.nvm/versions/node');
+          return require('fs').readdirSync(nvmDir).map((v: string) => join(nvmDir, v, 'bin', 'kyberbot'));
+        } catch { return []; }
+      })(),
+      '/usr/local/bin/kyberbot',
+      '/opt/homebrew/bin/kyberbot',
+      join(home, '.npm-global/bin/kyberbot'),
+    ];
+
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+
     // Check agent root node_modules
-    const agentRoot = this.store.getAgentRoot()!;
-    const localCli = join(agentRoot, 'node_modules', '@kyberbot', 'cli', 'dist', 'index.js');
-    if (existsSync(localCli)) return localCli;
+    const agentRoot = this.store.getAgentRoot();
+    if (agentRoot) {
+      const localCli = join(agentRoot, 'node_modules', '@kyberbot', 'cli', 'dist', 'index.js');
+      if (existsSync(localCli)) return localCli;
+    }
 
     throw new Error('kyberbot CLI not found. Install with: npm install -g @kyberbot/cli');
   }
