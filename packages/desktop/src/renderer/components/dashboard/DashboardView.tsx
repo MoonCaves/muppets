@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
+import { getLogBuffer, subscribeToLogs } from '../../hooks/useLogs';
 
 
 const SERVICE_NAMES = ['ChromaDB', 'Server', 'Heartbeat', 'Sleep Agent', 'Channels', 'Tunnel'];
@@ -29,7 +30,7 @@ function statusDot(status: string): string {
 export default function DashboardView() {
   const { health, cliStatus } = useApp();
   const kb = (window as any).kyberbot;
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logs, setLogs] = useState<string[]>(getLogBuffer());
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const isRunning = cliStatus === 'running';
@@ -38,18 +39,14 @@ export default function DashboardView() {
 
   const services = health?.services ?? SERVICE_NAMES.map(name => ({ name, status: isRunning ? 'unknown' : 'stopped' }));
 
-  // Subscribe to logs locally (not via AppContext to avoid re-rendering entire app)
+  // Subscribe to log buffer updates (module-level, persists across tab switches)
   useEffect(() => {
-    if (!kb) return;
-    return kb.logs.onLine((line: string) => {
-      setLogs(prev => {
-        const next = [...prev, line];
-        return next.length > 500 ? next.slice(-500) : next;
-      });
+    return subscribeToLogs((lines) => {
+      setLogs([...lines]);
     });
   }, []);
 
-  // Auto-scroll only the log container, not the whole page
+  // Auto-scroll only the log container
   useEffect(() => {
     const el = logContainerRef.current;
     if (el) el.scrollTop = el.scrollHeight;

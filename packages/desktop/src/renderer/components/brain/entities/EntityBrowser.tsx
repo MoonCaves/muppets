@@ -109,9 +109,9 @@ export default function EntityBrowser() {
   };
 
   return (
-    <div style={{ height: '100%', display: 'grid', gridTemplateColumns: '260px 1fr', overflow: 'hidden', minHeight: 0 }}>
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'grid', gridTemplateColumns: '260px 1fr', overflow: 'hidden' }}>
       {/* Left: Entity List */}
-      <div className="flex flex-col border-r" style={{ borderColor: 'var(--border-color)', minHeight: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border-color)', overflow: 'hidden' }}>
         {/* Search */}
         <div className="p-2 border-b" style={{ borderColor: 'var(--border-color)' }}>
           <div className="flex items-center gap-1.5 px-2 py-1" style={{ background: 'var(--bg-tertiary)' }}>
@@ -187,7 +187,7 @@ export default function EntityBrowser() {
       </div>
 
       {/* Right: Entity Detail */}
-      <div style={{ overflowY: 'auto', minHeight: 0 }}>
+      <div style={{ overflowY: 'auto', overflowX: 'hidden' }}>
         {!context ? (
           <div className="h-full flex items-center justify-center">
             <span className="text-[11px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Select an entity</span>
