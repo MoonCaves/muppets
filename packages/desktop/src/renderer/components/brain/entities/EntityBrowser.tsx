@@ -280,18 +280,21 @@ export default function EntityBrowser() {
                 </div>
                 <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
                   {context.related_entities.map((rel: any, i: number) => {
-                    const relColor = TYPE_COLORS[rel.type] || '#71717a';
+                    const relEntity = rel.entity || rel;
+                    const relName = relEntity.name || rel.name || 'Unknown';
+                    const relType = relEntity.type || rel.type || 'default';
+                    const relId = relEntity.id || rel.id;
+                    const relColor = TYPE_COLORS[relType] || '#71717a';
                     return (
-                      <div key={i} className="flex items-center gap-2 py-1" onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')} style={{ cursor: 'pointer' }} onClick={() => selectEntity(rel.id)}>
-                        <span className="text-[9px]" style={{ color: 'var(--fg-muted)' }}>{rel.direction === 'outgoing' ? '\u2192' : '\u2190'}</span>
+                      <div key={i} className="flex items-center gap-2 py-1" onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')} style={{ cursor: 'pointer' }} onClick={() => relId && selectEntity(relId)}>
+                        <span className="text-[9px]" style={{ color: 'var(--fg-muted)' }}>{'\u2194'}</span>
                         <span className="text-[8px] px-1 py-0.5 border" style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-violet)', borderColor: 'rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.1)' }}>
                           {rel.relationship || 'related'}
                         </span>
-                        <span className="text-[11px]" style={{ fontFamily: 'var(--font-mono)', color: relColor }}>{rel.name}</span>
-                        {rel.confidence != null && (
-                          <div className="ml-auto w-[30px] h-[3px]" style={{ background: 'var(--bg-tertiary)' }}>
-                            <div className="h-full" style={{ width: `${rel.confidence * 100}%`, background: 'var(--accent-emerald)' }} />
-                          </div>
+                        <span className="text-[11px]" style={{ fontFamily: 'var(--font-mono)', color: relColor }}>{relName}</span>
+                        <span className="text-[8px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>({relType})</span>
+                        {rel.strength != null && (
+                          <span className="text-[8px] ml-auto" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>×{rel.strength}</span>
                         )}
                       </div>
                     );
