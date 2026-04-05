@@ -33,7 +33,7 @@ function hasBinary(name: string): boolean {
   }
 }
 
-// Template files to copy from template/.claude/ into agent .claude/
+// Template files to copy from template/ into agent instance
 const TEMPLATE_FILES = [
   ['.claude/CLAUDE.md', '.claude/CLAUDE.md'],
   ['.claude/settings.local.json', '.claude/settings.local.json'],
@@ -42,6 +42,11 @@ const TEMPLATE_FILES = [
   ['.claude/skills/templates/skill-template.md', '.claude/skills/templates/skill-template.md'],
   ['.claude/agents/templates/agent-template.md', '.claude/agents/templates/agent-template.md'],
   ['.claude/skills/agent-generator.md', '.claude/skills/agent-generator.md'],
+  // Core built-in skills — keep in sync with onboard.ts templateFiles
+  ['skills/recall/SKILL.md', 'skills/recall/SKILL.md'],
+  ['skills/remember/SKILL.md', 'skills/remember/SKILL.md'],
+  ['skills/brain-note/SKILL.md', 'skills/brain-note/SKILL.md'],
+  ['skills/heartbeat-task/SKILL.md', 'skills/heartbeat-task/SKILL.md'],
 ];
 
 /**
@@ -205,10 +210,14 @@ function refreshTemplates(root: string): string[] {
     return refreshed;
   }
 
-  // Ensure .claude/ subdirectories exist
+  // Ensure subdirectories exist
   mkdirSync(join(root, '.claude', 'commands'), { recursive: true });
   mkdirSync(join(root, '.claude', 'skills', 'templates'), { recursive: true });
   mkdirSync(join(root, '.claude', 'agents', 'templates'), { recursive: true });
+  mkdirSync(join(root, 'skills', 'recall'), { recursive: true });
+  mkdirSync(join(root, 'skills', 'remember'), { recursive: true });
+  mkdirSync(join(root, 'skills', 'brain-note'), { recursive: true });
+  mkdirSync(join(root, 'skills', 'heartbeat-task'), { recursive: true });
 
   // Back up CLAUDE.md before overwriting
   const claudeMdPath = join(root, '.claude', 'CLAUDE.md');

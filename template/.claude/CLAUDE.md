@@ -151,53 +151,51 @@ When the user asks to switch models (e.g. "use sonnet", "switch to haiku", "go b
 
 ## Memory
 
-### Kybernesis Local
+### Memory Hierarchy — READ THIS FIRST
 
-My local memory system — all data stored on this machine:
+I have two memory systems. They are NOT equal. One is primary, one is supplementary.
 
-- **Entity Graph**: Tracks people, companies, projects, and their relationships
-- **Timeline**: Temporal event index with full-text search
-- **Semantic Search**: Vector search for meaning-based queries via ChromaDB
-- **Sleep Agent**: Hourly maintenance (decay, tag, link, tier, summarize, entity hygiene)
-- **Auto-capture**: Telegram, WhatsApp, and heartbeat conversations are automatically stored in Timeline, Entity Graph, and Embeddings after each reply
+**PRIMARY — KyberBot Memory (Kybernesis Local)**
+The authoritative knowledge store. Three layers, all on this machine:
+- **Entity Graph** (SQLite) — people, companies, projects, relationships, structured facts
+- **Timeline** (SQLite) — temporal event index with full-text search
+- **Semantic Search** (ChromaDB) — vector embeddings for meaning-based queries
+
+Accessed via bash commands: `kyberbot recall`, `kyberbot timeline`, `kyberbot search`.
+Maintained by the Sleep Agent (hourly: decay, tag, link, tier, summarize, entity hygiene).
+Auto-capture: Telegram, WhatsApp, and heartbeat conversations are automatically stored after each reply.
+
+**SUPPLEMENTARY — Claude Code Memory Files**
+Claude Code maintains its own memory files at `~/.claude/projects/.../memory/`. These are automatically injected into conversation context. They are useful as a quick-reference index, but they are a **secondary, incomplete layer**. They do not contain the entity graph, timeline history, or semantic embeddings. Do NOT treat them as the complete picture.
+
+**The rule: ALWAYS query KyberBot memory first — before reading ANY files — for any question about people, projects, history, decisions, context, your own role, what you know, or what you do.** Even if Claude Code memory files or SOUL.md/USER.md seem to have an answer, the KyberBot pipeline has richer, more complete, and more current data. Query KyberBot memory first, then read files to supplement. When they conflict, KyberBot memory is authoritative.
+
+### How KyberBot Skills Work
+
+KyberBot skills are NOT invoked via Claude Code's `Skill()` tool. They are **SKILL.md files** in the `skills/` directory that define bash-based workflows. To execute a skill:
+
+1. Read the skill's `SKILL.md` file for instructions (e.g., `skills/recall/SKILL.md`)
+2. Run the bash commands described in that file
+3. Follow the workflow steps defined there
+
+The `Skill()` tool in Claude Code is a different mechanism entirely — it invokes Claude Code plugins, not KyberBot skills. When this document says "fire a skill," it means: read the SKILL.md and run the bash commands.
 
 ### Cross-Channel Awareness
 
 In messaging channels (Telegram, WhatsApp), the system prompt automatically includes recent activity from ALL channels — terminal, Telegram, WhatsApp, and heartbeat. This means I can reference what happened in other sessions without the user needing to repeat themselves.
 
-### Terminal Sessions & Built-in Skills
+### Terminal Sessions — Memory Skills
 
-Messaging channels (Telegram, WhatsApp) and heartbeat conversations are automatically stored in the memory pipeline after each reply. **Terminal sessions are not.** The following built-in skills handle persistence and context retrieval in terminal sessions. Fire them **proactively** — don't wait for the user to ask.
+Messaging channels and heartbeat conversations are automatically stored in the KyberBot memory pipeline after each reply. **Terminal sessions are not.** The following skills handle persistence and retrieval. They are **mandatory, not optional** — fire them proactively without waiting for the user to ask.
 
-**`remember`** — Store facts, events, and decisions in the memory pipeline (timeline, entity graph, embeddings). Run `kyberbot remember "<text>"` whenever:
-- User mentions a person and their role or relationship
-- A decision is made about a project, tool, or approach
-- Meeting notes, conversation summaries, or event recaps come up
-- User shares facts about themselves, their work, or their goals
-- Deadlines, milestones, or schedule changes are discussed
-- New projects, companies, or initiatives are mentioned
-- Any fact that a future session would benefit from knowing
-- Don't store: trivial exchanges, mechanical requests, or duplicates from this session
+**To execute any skill: read its `skills/<name>/SKILL.md` and follow the workflow defined there.** Do NOT run ad-hoc bash commands from memory — always read the SKILL.md first. The skill files define the correct sequence, combinations, and synthesis steps.
 
-**`recall`** — Look up what you know about a person, project, company, or topic. Run `kyberbot recall "<entity>"` whenever:
-- User mentions someone by name and you lack recent context about them
-- A project or company is discussed and you need background
-- User asks about past interactions, decisions, or history
-- Historical context would improve the advice you're about to give
-- Run with no args to see all tracked entities: `kyberbot recall`
-
-**`heartbeat-task`** — Add, update, or remove recurring tasks in HEARTBEAT.md whenever:
-- User describes something that should happen regularly ("every morning", "weekly", "check daily")
-- User changes or cancels an existing recurring task
-- User wants results delivered to Telegram, brain files, or another channel
-
-**`brain-note`** — Write structured knowledge to `brain/` files whenever:
-- Architecture or design decisions are discussed with rationale
-- Research findings or analysis results come up
-- Detailed meeting notes are shared (beyond what a single `remember` captures)
-- Reference material, specs, or documentation should be retained
-
-After writing a brain note, always index it: `kyberbot brain add brain/<filename>.md --title "<title>" --type note`
+| Skill | SKILL.md | When to Fire |
+|-------|----------|-------------|
+| **recall** | `skills/recall/SKILL.md` | **ALWAYS first** — any question about people, projects, history, context, your own role, or what you know. This is non-negotiable. Read the SKILL.md and follow every step. |
+| **remember** | `skills/remember/SKILL.md` | User shares facts, decisions, people, deadlines, or anything a future session should know |
+| **brain-note** | `skills/brain-note/SKILL.md` | Architecture decisions, research findings, detailed meeting notes, reference material |
+| **heartbeat-task** | `skills/heartbeat-task/SKILL.md` | User describes something that should happen on a recurring schedule |
 
 Continue to update USER.md and SOUL.md directly when structured personal or identity information changes — the skills complement those files, they don't replace them.
 

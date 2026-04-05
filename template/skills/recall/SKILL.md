@@ -4,13 +4,19 @@ description: "Look up what the agent knows about a person, project, company, pla
 allowed-tools: Bash(kyberbot recall *), Bash(kyberbot timeline *), Bash(kyberbot search *)
 ---
 
-# Recall
+# Recall — Primary Memory Retrieval
 
-Queries the brain's entity graph and timeline to retrieve everything the agent knows about a person, project, company, or topic. This is the read counterpart to the `remember` skill — together they give terminal sessions full bidirectional memory.
+This is the **primary memory retrieval path** for the agent. The KyberBot memory pipeline (entity graph, timeline, ChromaDB embeddings) is the authoritative knowledge store — richer and more complete than Claude Code's auto-memory files. When the user asks about anything stored in memory, this skill is the correct way to retrieve it.
+
+This is the read counterpart to the `remember` skill — together they give terminal sessions full bidirectional memory.
+
+**This skill is invoked by reading this file and running the bash commands below — NOT via Claude Code's `Skill()` tool.**
 
 ## When to Fire
 
-Fire this skill **proactively** when context would help the conversation. Don't wait for the user to say "recall" — if they mention a name or entity and you don't already have context loaded, look it up.
+**ALWAYS** fire this skill when the user asks about or mentions any person, project, company, place, topic, past decision, history, or context. Do not skip it because Claude Code memory files seem to have an answer — those files are a supplementary index, not the full picture. This skill queries the entity graph, temporal timeline, and semantic embeddings, which contain far more detail.
+
+Do not wait for the user to say "recall." If they mention a name or entity and you don't already have fresh context loaded in this session, look it up immediately.
 
 **Always look up when:**
 - The user mentions a person by name and you don't have recent context about them
@@ -19,6 +25,7 @@ Fire this skill **proactively** when context would help the conversation. Don't 
 - You're about to give advice and historical context would improve it
 - A meeting or event is referenced and you need details
 - The user asks about past decisions, conversations, or interactions
+- Any question where memory, knowledge, or context is involved
 
 **Don't look up:**
 - Entities you already retrieved in this session
