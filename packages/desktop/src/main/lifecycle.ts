@@ -50,6 +50,23 @@ export class LifecycleManager extends EventEmitter {
 
   async startCli(): Promise<void> {
     if (this.process) return;
+
+    // Check if a server is already running on the expected port
+    try {
+      const port = this.getServerPort();
+      const res = await fetch(`http://localhost:${port}/health`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        // Server already running (started externally or from a previous session)
+        console.log('[lifecycle] Server already running on port', port, '— attaching');
+        this._status = 'running';
+        this.emit('status-change', this._status);
+        this.startHealthPolling();
+        return;
+      }
+    } catch {
+      // No server running, proceed to spawn
+    }
+
     this.restartCount = 0;
     this.spawnProcess();
   }
