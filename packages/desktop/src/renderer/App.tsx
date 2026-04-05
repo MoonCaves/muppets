@@ -7,7 +7,12 @@ import { AppProvider, useApp } from './context/AppContext';
 import TitleBar from './components/layout/TitleBar';
 import TabBar, { type TabId } from './components/layout/TabBar';
 import DashboardView from './components/dashboard/DashboardView';
-import LogView from './components/logs/LogView';
+import ChatView from './components/chat/ChatView';
+import SkillsView from './components/skills/SkillsView';
+import AgentsView from './components/agents/AgentsView';
+import ChannelsView from './components/channels/ChannelsView';
+import HeartbeatView from './components/heartbeat/HeartbeatView';
+import SettingsView from './components/settings/SettingsView';
 import PlaceholderView from './components/shared/PlaceholderView';
 
 function AppContent() {
@@ -49,13 +54,13 @@ function AppContent() {
       <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
       <div className="flex-1 min-h-0">
         {activeTab === 'dashboard' && <DashboardView />}
-        {activeTab === 'chat' && <PlaceholderView title="Chat" description="Phase D — SSE chat with @kyberbot/web components" />}
-        {activeTab === 'skills' && <PlaceholderView title="Skills" description="Phase F — Skill CRUD via management API" />}
-        {activeTab === 'agents' && <PlaceholderView title="Agents" description="Phase F — Agent CRUD + spawn via management API" />}
-        {activeTab === 'channels' && <PlaceholderView title="Channels" description="Phase G — Channel status and configuration" />}
-        {activeTab === 'heartbeat' && <PlaceholderView title="Heartbeat" description="Phase G — Task management and heartbeat log" />}
+        {activeTab === 'chat' && <ChatView />}
+        {activeTab === 'skills' && <SkillsView />}
+        {activeTab === 'agents' && <AgentsView />}
+        {activeTab === 'channels' && <ChannelsView />}
+        {activeTab === 'heartbeat' && <HeartbeatView />}
         {activeTab === 'brain' && <PlaceholderView title="Brain" description="Phase H — p5.js canvas + entity browser" />}
-        {activeTab === 'settings' && <PlaceholderView title="Settings" description="Phase E — Identity, API keys, server config" />}
+        {activeTab === 'settings' && <SettingsView />}
       </div>
     </div>
   );
