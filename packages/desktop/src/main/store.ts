@@ -1,53 +1,69 @@
 /**
- * Typed electron-store wrapper for persisting app state.
+ * Simple file-based settings store.
+ * Replaces electron-store to avoid ESM/CJS conflicts.
  */
 
-import Store from 'electron-store';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { join } from 'path';
+import { app } from 'electron';
 
-interface StoreSchema {
+interface StoreData {
   agentRoot: string | null;
   windowBounds: Record<string, { x: number; y: number; width: number; height: number }>;
   autoStart: boolean;
 }
 
+const DEFAULTS: StoreData = {
+  agentRoot: null,
+  windowBounds: {},
+  autoStart: true,
+};
+
 export class AppStore {
-  private store: Store<StoreSchema>;
+  private data: StoreData;
+  private filePath: string;
 
   constructor() {
-    this.store = new Store<StoreSchema>({
-      name: 'kyberbot-desktop',
-      defaults: {
-        agentRoot: null,
-        windowBounds: {},
-        autoStart: true,
-      },
-    });
+    const userDataPath = app.getPath('userData');
+    if (!existsSync(userDataPath)) mkdirSync(userDataPath, { recursive: true });
+    this.filePath = join(userDataPath, 'settings.json');
+
+    try {
+      this.data = JSON.parse(readFileSync(this.filePath, 'utf-8'));
+    } catch {
+      this.data = { ...DEFAULTS };
+    }
+  }
+
+  private save(): void {
+    writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
   }
 
   getAgentRoot(): string | null {
-    return this.store.get('agentRoot');
+    return this.data.agentRoot ?? null;
   }
 
   setAgentRoot(path: string): void {
-    this.store.set('agentRoot', path);
+    this.data.agentRoot = path;
+    this.save();
   }
 
   getWindowBounds(name: string): { x: number; y: number; width: number; height: number } | undefined {
-    const bounds = this.store.get('windowBounds');
-    return bounds[name];
+    return this.data.windowBounds?.[name];
   }
 
   setWindowBounds(name: string, rect: { x: number; y: number; width: number; height: number }): void {
-    const bounds = this.store.get('windowBounds');
-    bounds[name] = rect;
-    this.store.set('windowBounds', bounds);
+    if (!this.data.windowBounds) this.data.windowBounds = {};
+    this.data.windowBounds[name] = rect;
+    this.save();
   }
 
   getAutoStart(): boolean {
-    return this.store.get('autoStart');
+    return this.data.autoStart ?? true;
   }
 
   setAutoStart(value: boolean): void {
-    this.store.set('autoStart', value);
+    this.data.autoStart = value;
+    this.save();
   }
 }
