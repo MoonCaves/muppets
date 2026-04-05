@@ -2,7 +2,7 @@
  * App-wide context: API token, server URL, health state, agent root, logs.
  */
 
-import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import type { HealthData } from '../../types/ipc';
 
 interface AppContextValue {
@@ -12,7 +12,6 @@ interface AppContextValue {
   health: HealthData | null;
   cliStatus: string;
   isReady: boolean;
-  logs: string[];
 }
 
 const AppContext = createContext<AppContextValue>({
@@ -22,7 +21,6 @@ const AppContext = createContext<AppContextValue>({
   health: null,
   cliStatus: 'stopped',
   isReady: false,
-  logs: [],
 });
 
 export function useApp(): AppContextValue {
@@ -36,7 +34,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [cliStatus, setCliStatus] = useState('stopped');
   const [isReady, setIsReady] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
 
   useEffect(() => {
     const kb = (window as any).kyberbot;
@@ -78,23 +75,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    // Subscribe to logs (persistent for entire session)
-    const unsubLogs = kb.logs.onLine((line: string) => {
-      setLogs(prev => {
-        const next = [...prev, line];
-        return next.length > 2000 ? next.slice(-2000) : next;
-      });
-    });
-
     return () => {
       unsubHealth();
       unsubStatus();
-      unsubLogs();
     };
   }, []);
 
   return (
-    <AppContext.Provider value={{ agentRoot, apiToken, serverUrl, health, cliStatus, isReady, logs }}>
+    <AppContext.Provider value={{ agentRoot, apiToken, serverUrl, health, cliStatus, isReady }}>
       {children}
     </AppContext.Provider>
   );
