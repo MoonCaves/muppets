@@ -9,6 +9,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { readFileSync, writeFileSync, statSync, existsSync } from 'fs';
 import { join } from 'path';
 import { spawn } from 'node:child_process';
+import yaml from 'js-yaml';
 import { paths, getRoot, getClaudeModel } from '../config.js';
 import { loadInstalledSkills, getSkill } from '../skills/loader.js';
 import { scaffoldSkill } from '../skills/scaffolder.js';
@@ -432,6 +433,58 @@ export function createManagementRouter(channels: Channel[]): Router {
     }
   });
 
+  // GET /channels/config — Read channel config from identity.yaml
+  router.get('/channels/config', (_req, res) => {
+    try {
+      const root = getRoot();
+      const identityPath = join(root, 'identity.yaml');
+      const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, any>;
+      res.json({ channels: identity.channels || {} });
+    } catch (err) {
+      logger.error('Failed to read channel config', { error: String(err) });
+      res.status(500).json({ error: 'Failed to read channel config' });
+    }
+  });
+
+  // POST /channels/:type — Add/configure a channel
+  router.post('/channels/:type', (req, res) => {
+    const type = req.params.type as string;
+    if (!['telegram', 'whatsapp'].includes(type)) {
+      res.status(400).json({ error: 'Channel type must be telegram or whatsapp' });
+      return;
+    }
+    try {
+      const root = getRoot();
+      const identityPath = join(root, 'identity.yaml');
+      const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, any>;
+      if (!identity.channels) identity.channels = {};
+      identity.channels[type] = req.body;
+      writeFileSync(identityPath, yaml.dump(identity, { lineWidth: 120 }), 'utf-8');
+      res.json({ ok: true });
+    } catch (err) {
+      logger.error('Failed to configure channel', { error: String(err) });
+      res.status(500).json({ error: 'Failed to configure channel' });
+    }
+  });
+
+  // DELETE /channels/:type — Remove a channel
+  router.delete('/channels/:type', (req, res) => {
+    const type = req.params.type as string;
+    try {
+      const root = getRoot();
+      const identityPath = join(root, 'identity.yaml');
+      const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, any>;
+      if (identity.channels) {
+        delete identity.channels[type];
+        writeFileSync(identityPath, yaml.dump(identity, { lineWidth: 120 }), 'utf-8');
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      logger.error('Failed to remove channel', { error: String(err) });
+      res.status(500).json({ error: 'Failed to remove channel' });
+    }
+  });
+
   // ─────────────────────────────────────────────────────────────────
   // Heartbeat
   // ─────────────────────────────────────────────────────────────────
@@ -510,6 +563,53 @@ export function createManagementRouter(channels: Channel[]): Router {
     } catch (err) {
       logger.error('Failed to read heartbeat log', { error: String(err) });
       res.status(500).json({ error: 'Failed to read heartbeat log' });
+    }
+  });
+
+  // POST /heartbeat/run — Manual heartbeat trigger
+  router.post('/heartbeat/run', asyncHandler(async (_req, res) => {
+    try {
+      const { spawnSync } = await import('node:child_process');
+      const root = getRoot();
+      const result = spawnSync('kyberbot', ['heartbeat', 'run'], {
+        cwd: root,
+        env: { ...process.env, KYBERBOT_ROOT: root },
+        encoding: 'utf-8',
+        timeout: 60_000,
+      });
+      res.json({ ok: true, output: result.stdout, error: result.stderr });
+    } catch (err) {
+      logger.error('Failed to trigger heartbeat', { error: String(err) });
+      res.status(500).json({ error: 'Failed to trigger heartbeat' });
+    }
+  }));
+
+  // GET /logs/:service — Tail service-specific log
+  router.get('/logs/:service', (req, res) => {
+    try {
+      const service = req.params.service as string;
+      const maxLines = Math.min(parseInt(req.query.lines as string || '100') || 100, 500);
+      const root = getRoot();
+
+      // Map service names to log files
+      const logFiles: Record<string, string> = {
+        heartbeat: join(root, 'logs', 'heartbeat.log'),
+        desktop: join(root, 'logs', 'desktop-cli.log'),
+      };
+
+      const logPath = logFiles[service];
+      if (!logPath || !existsSync(logPath)) {
+        res.json({ content: '', exists: false });
+        return;
+      }
+
+      const full = readFileSync(logPath, 'utf-8');
+      const lines = full.split('\n');
+      const tail = lines.slice(-maxLines).join('\n');
+      res.json({ content: tail, exists: true });
+    } catch (err) {
+      logger.error('Failed to read service log', { error: String(err) });
+      res.status(500).json({ error: 'Failed to read service log' });
     }
   });
 

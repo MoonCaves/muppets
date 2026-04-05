@@ -7,6 +7,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import MemoryBlocks from './MemoryBlocks';
 import SessionList from './SessionList';
+import MarkdownRenderer from './MarkdownRenderer';
 
 interface ToolCall {
   id: string;
@@ -265,13 +266,15 @@ export default function ChatView() {
             )}
 
             {/* Content */}
-            <div className="text-[13px] whitespace-pre-wrap" style={{
-              fontFamily: msg.role === 'user' ? 'var(--font-mono)' : 'var(--font-sans)',
-              color: 'var(--fg-primary)',
-              lineHeight: '1.6',
-            }}>
-              {msg.content}
-            </div>
+            {msg.role === 'user' ? (
+              <div className="text-[13px] whitespace-pre-wrap" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)', lineHeight: '1.6' }}>
+                {msg.content}
+              </div>
+            ) : (
+              <div className="text-[13px]" style={{ fontFamily: 'var(--font-sans)', color: 'var(--fg-primary)' }}>
+                <MarkdownRenderer content={msg.content} />
+              </div>
+            )}
           </div>
         ))}
 
@@ -303,8 +306,8 @@ export default function ChatView() {
 
             {/* Streaming text */}
             {streamText && (
-              <div className="text-[13px] whitespace-pre-wrap" style={{ fontFamily: 'var(--font-sans)', color: 'var(--fg-primary)', lineHeight: '1.6' }}>
-                {streamText}
+              <div className="text-[13px]" style={{ fontFamily: 'var(--font-sans)', color: 'var(--fg-primary)' }}>
+                <MarkdownRenderer content={streamText} />
                 <span className="inline-block w-[2px] h-[14px] ml-0.5 animate-pulse" style={{ background: 'var(--accent-emerald)', verticalAlign: 'text-bottom' }} />
               </div>
             )}

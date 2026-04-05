@@ -46,6 +46,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: path.resolve(__dirname, 'index.html'),
+          brain: path.resolve(__dirname, 'brain.html'),
         },
         output: {
           format: 'es',

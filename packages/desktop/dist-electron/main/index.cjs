@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
 const child_process = require("child_process");
 const yaml = require("js-yaml");
 const events = require("events");
+const electronUpdater = require("electron-updater");
 function _interopNamespaceDefault(e) {
   const n = Object.create(null, { [Symbol.toStringTag]: { value: "Module" } });
   if (e) {
@@ -277,6 +278,35 @@ function randomHex(length) {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 function setupIpcHandlers(lifecycle2, store2, getMainWindow) {
+  let brainWindow = null;
+  electron.ipcMain.handle("brain:popout", () => {
+    if (brainWindow && !brainWindow.isDestroyed()) {
+      brainWindow.focus();
+      return;
+    }
+    brainWindow = new electron.BrowserWindow({
+      width: 1200,
+      height: 800,
+      title: "KyberBot — Brain Graph",
+      backgroundColor: "#0a0a0a",
+      webPreferences: {
+        preload: path.join(__dirname, "../preload/index.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+        webSecurity: false
+      }
+    });
+    if (process.env.NODE_ENV === "development" || process.env.ELECTRON_RENDERER_URL) {
+      const url = (process.env.ELECTRON_RENDERER_URL || "http://localhost:5173").replace(/\/$/, "");
+      brainWindow.loadURL(`${url}/brain.html`);
+    } else {
+      brainWindow.loadFile(path.join(__dirname, "../../dist/brain.html"));
+    }
+    brainWindow.on("closed", () => {
+      brainWindow = null;
+    });
+  });
   electron.ipcMain.on(IPC.WINDOW_MINIMIZE, (event) => {
     electron.BrowserWindow.fromWebContents(event.sender)?.minimize();
   });
@@ -606,6 +636,43 @@ function updateTrayStatus(status) {
   const statusLabel = status === "ok" ? "Running" : status === "degraded" ? "Degraded" : "Offline";
   tray.setToolTip(`KyberBot Desktop — ${statusLabel}`);
 }
+function setupAutoUpdater(getMainWindow) {
+  if (process.env.NODE_ENV === "development") return;
+  electronUpdater.autoUpdater.autoDownload = false;
+  electronUpdater.autoUpdater.autoInstallOnAppQuit = true;
+  electronUpdater.autoUpdater.on("update-available", (info) => {
+    const win = getMainWindow();
+    if (!win) return;
+    electron.dialog.showMessageBox(win, {
+      type: "info",
+      title: "Update Available",
+      message: `KyberBot ${info.version} is available. Download now?`,
+      buttons: ["Download", "Later"]
+    }).then(({ response }) => {
+      if (response === 0) {
+        electronUpdater.autoUpdater.downloadUpdate();
+      }
+    });
+  });
+  electronUpdater.autoUpdater.on("update-downloaded", () => {
+    const win = getMainWindow();
+    if (!win) return;
+    electron.dialog.showMessageBox(win, {
+      type: "info",
+      title: "Update Ready",
+      message: "Update downloaded. Restart to apply?",
+      buttons: ["Restart", "Later"]
+    }).then(({ response }) => {
+      if (response === 0) {
+        electronUpdater.autoUpdater.quitAndInstall();
+      }
+    });
+  });
+  setTimeout(() => {
+    electronUpdater.autoUpdater.checkForUpdates().catch(() => {
+    });
+  }, 1e4);
+}
 const store = new AppStore();
 const lifecycle = new LifecycleManager(store);
 const agentRoot = store.getAgentRoot();
@@ -675,6 +742,7 @@ electron.app.whenReady().then(async () => {
   setupIpcHandlers(lifecycle, store, () => mainWindow);
   createWindow();
   createTray(lifecycle, () => mainWindow);
+  setupAutoUpdater(() => mainWindow);
   lifecycle.on("error", (message) => {
     console.error("[lifecycle] Error:", message);
   });

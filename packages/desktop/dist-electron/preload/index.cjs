@@ -63,6 +63,9 @@ const api = {
       return () => electron.ipcRenderer.removeListener(IPC.LOGS_LINE, handler);
     }
   },
+  brain: {
+    popout: () => electron.ipcRenderer.invoke("brain:popout")
+  },
   onboarding: {
     create: (data) => electron.ipcRenderer.invoke(IPC.ONBOARD_CREATE, data)
   }

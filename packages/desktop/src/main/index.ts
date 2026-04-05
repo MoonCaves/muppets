@@ -13,6 +13,7 @@ import { setupIpcHandlers } from './ipc/index.js';
 import { LifecycleManager } from './lifecycle.js';
 import { AppStore } from './store.js';
 import { createTray, updateTrayStatus } from './tray.js';
+import { setupAutoUpdater } from './updater.js';
 import { IPC } from '../types/ipc.js';
 
 const store = new AppStore();
@@ -106,6 +107,7 @@ app.whenReady().then(async () => {
   setupIpcHandlers(lifecycle, store, () => mainWindow);
   createWindow();
   createTray(lifecycle, () => mainWindow);
+  setupAutoUpdater(() => mainWindow);
 
   // Handle lifecycle errors gracefully (prevent ERR_UNHANDLED_ERROR crash)
   lifecycle.on('error', (message: string) => {

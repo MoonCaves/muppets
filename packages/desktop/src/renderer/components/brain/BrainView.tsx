@@ -60,6 +60,13 @@ export default function BrainView() {
         ))}
         <div className="flex-1" />
         <button
+          onClick={() => (window as any).kyberbot?.brain?.popout()}
+          className="px-2 py-1 text-[9px] tracking-[1px] uppercase"
+          style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-violet)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+        >
+          Pop Out
+        </button>
+        <button
           onClick={loadGraph}
           className="px-2 py-1 text-[9px] tracking-[1px] uppercase"
           style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}

@@ -2,6 +2,7 @@
  * Dashboard — service status cards and health summary.
  */
 
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 
 const SERVICE_NAMES = ['ChromaDB', 'Server', 'Heartbeat', 'Sleep Agent', 'Channels', 'Tunnel'];
@@ -22,6 +23,41 @@ function statusDot(status: string): string {
     case 'error': return 'status-dot--error';
     default: return 'status-dot--offline';
   }
+}
+
+function LogSection() {
+  const [lines, setLines] = useState<string[]>([]);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const kb = (window as any).kyberbot;
+    if (!kb) return;
+    return kb.logs.onLine((line: string) => {
+      setLines(prev => {
+        const next = [...prev, line];
+        return next.length > 200 ? next.slice(-200) : next;
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [lines]);
+
+  return (
+    <div className="mt-6">
+      <span className="section-title" style={{ color: 'var(--fg-tertiary)' }}>{'// LOGS'}</span>
+      <div className="mt-2 border overflow-y-auto" style={{ maxHeight: '200px', borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+        <div className="p-2">
+          {lines.length === 0 && <span className="text-[9px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Waiting for log output...</span>}
+          {lines.map((line, i) => (
+            <div key={i} className="text-[10px] leading-4 whitespace-pre-wrap break-all" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-secondary)' }}>{line}</div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function DashboardView() {
@@ -135,6 +171,9 @@ export default function DashboardView() {
           </span>
         </div>
       )}
+
+      {/* Integrated Log Viewer */}
+      {isRunning && <LogSection />}
     </div>
   );
 }

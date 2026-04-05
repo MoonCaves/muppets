@@ -53,6 +53,10 @@ const api = {
     },
   },
 
+  brain: {
+    popout: (): Promise<void> => ipcRenderer.invoke('brain:popout'),
+  },
+
   onboarding: {
     create: (data: {
       agentRoot: string;
