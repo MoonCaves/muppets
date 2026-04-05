@@ -210,7 +210,7 @@ export default function ChatView() {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', background: 'var(--bg-primary)', minHeight: 0 }}>
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', background: 'var(--bg-primary)' }}>
       {/* Main chat area */}
       <div className="flex-col-layout" style={{ flex: 1, borderRight: '1px solid var(--border-color)' }}>
         {/* Chat header */}

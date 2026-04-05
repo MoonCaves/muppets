@@ -91,7 +91,7 @@ export default function HeartbeatView() {
   const labelStyle = { color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase' as const, display: 'block', marginBottom: '2px' };
 
   return (
-    <div className="flex-col-layout" style={{ height: '100%', background: 'var(--bg-primary)' }}>
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
       {/* Header with tabs + actions */}
       <div className="flex items-center px-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex items-center gap-0 flex-1">

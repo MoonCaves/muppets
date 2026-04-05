@@ -22,21 +22,18 @@ function AppContent() {
 
   if (!isReady) {
     return (
-      <div className="h-full flex items-center justify-center" style={{ background: 'var(--bg-primary)' }}>
-        <span className="text-[11px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
-          Loading...
-        </span>
+      <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)' }}>
+        <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Loading...</span>
       </div>
     );
   }
 
-  // No agent configured — show welcome screen with two options
   if (!agentRoot) {
     if (showOnboarding) {
       return (
-        <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
           <TitleBar />
-          <div className="flex-1 min-h-0">
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
             <OnboardingWizard onComplete={() => window.location.reload()} />
           </div>
         </div>
@@ -44,43 +41,16 @@ function AppContent() {
     }
 
     return (
-      <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
         <TitleBar />
-        <div className="flex-1 flex flex-col items-center justify-center p-8">
-          <span className="section-title mb-4" style={{ color: 'var(--accent-emerald)' }}>
-            {'// WELCOME TO KYBERBOT'}
-          </span>
-          <p className="text-[13px] text-center max-w-md mb-8" style={{ color: 'var(--fg-secondary)', fontFamily: 'var(--font-sans)', fontWeight: 300 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px' }}>
+          <span className="section-title" style={{ color: 'var(--accent-emerald)', marginBottom: '16px' }}>{'// WELCOME TO KYBERBOT'}</span>
+          <p style={{ fontSize: '13px', textAlign: 'center', maxWidth: '28rem', marginBottom: '32px', color: 'var(--fg-secondary)', fontFamily: 'var(--font-sans)', fontWeight: 300 }}>
             Create a new agent from scratch, or open an existing agent directory.
           </p>
-
-          <div className="flex gap-4">
-            <button
-              onClick={() => setShowOnboarding(true)}
-              className="px-6 py-3 text-[11px] tracking-[2px] uppercase border transition-colors"
-              style={{ fontFamily: 'var(--font-mono)', borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)', background: 'transparent', cursor: 'pointer' }}
-              onMouseEnter={(e) => { (e.target as HTMLElement).style.background = 'rgba(16, 185, 129, 0.1)'; }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
-            >
-              Create New Agent
-            </button>
-            <button
-              onClick={async () => {
-                const kb = (window as any).kyberbot;
-                const result = await kb.config.selectAgentRoot();
-                if (result?.hasIdentity) {
-                  window.location.reload();
-                } else if (result) {
-                  alert(`No identity.yaml found in ${result.path}. This doesn't appear to be a configured KyberBot agent directory.`);
-                }
-              }}
-              className="px-6 py-3 text-[11px] tracking-[2px] uppercase border transition-colors"
-              style={{ fontFamily: 'var(--font-mono)', borderColor: 'var(--accent-cyan)', color: 'var(--accent-cyan)', background: 'transparent', cursor: 'pointer' }}
-              onMouseEnter={(e) => { (e.target as HTMLElement).style.background = 'rgba(34, 211, 238, 0.1)'; }}
-              onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
-            >
-              Open Existing Agent
-            </button>
+          <div style={{ display: 'flex', gap: '16px' }}>
+            <button onClick={() => setShowOnboarding(true)} style={{ padding: '12px 24px', fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', border: '1px solid var(--accent-emerald)', color: 'var(--accent-emerald)', background: 'transparent', cursor: 'pointer' }}>Create New Agent</button>
+            <button onClick={async () => { const kb = (window as any).kyberbot; const result = await kb.config.selectAgentRoot(); if (result?.hasIdentity) window.location.reload(); else if (result) alert('No identity.yaml found.'); }} style={{ padding: '12px 24px', fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', border: '1px solid var(--accent-cyan)', color: 'var(--accent-cyan)', background: 'transparent', cursor: 'pointer' }}>Open Existing Agent</button>
           </div>
         </div>
       </div>
@@ -88,10 +58,10 @@ function AppContent() {
   }
 
   return (
-    <div className="flex-col-layout" style={{ height: '100%', background: 'var(--bg-primary)' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-primary)' }}>
       <TitleBar />
       <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
-      <div className="flex-fill">
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'chat' && <ChatView />}
         {activeTab === 'skills' && <SkillsView />}

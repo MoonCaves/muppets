@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import { manageFetch } from '../../utils/api';
 
+
 interface ChannelInfo { name: string; connected: boolean; verified: boolean | null; }
 interface ChannelConfig { telegram?: { bot_token?: string; owner_chat_id?: number }; whatsapp?: { enabled?: boolean }; }
 
@@ -80,7 +81,7 @@ export default function ChannelsView() {
   const telegramStatus = channels.find(c => c.name === 'telegram');
 
   return (
-    <div className="view-scroll" style={{ padding: '16px', background: 'var(--bg-primary)' }}>
+    <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, overflowY: "auto", padding: 16, background: "var(--bg-primary)" }}>
       <span className="section-title" style={{ color: 'var(--accent-emerald)' }}>{'// CHANNELS'}</span>
       <p className="text-[11px] mt-1 mb-4" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
         Configure messaging channels. Restart services after changes.

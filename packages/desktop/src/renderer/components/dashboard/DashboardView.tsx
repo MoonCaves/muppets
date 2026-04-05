@@ -5,6 +5,7 @@
 import { useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 
+
 const SERVICE_NAMES = ['ChromaDB', 'Server', 'Heartbeat', 'Sleep Agent', 'Channels', 'Tunnel'];
 
 function statusColor(status: string): string {
@@ -41,7 +42,7 @@ export default function DashboardView() {
   }, [logs.length]);
 
   return (
-    <div className="view-scroll" style={{ padding: '16px', background: 'var(--bg-primary)' }}>
+    <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, overflowY: "auto", padding: 16, background: "var(--bg-primary)" }}>
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <span className="section-title" style={{ color: 'var(--accent-emerald)' }}>
