@@ -14,15 +14,13 @@
   },
   "dependencies": {
     "ansi-to-html": "^0.7.2",
-    "clsx": "^2.1.0",
     "dotenv": "^17.2.3",
     "electron-updater": "^6.3.0",
     "js-yaml": "^4.1.0",
     "lucide-react": "^0.400.0",
     "p5": "^2.2.3",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^2.2.0"
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

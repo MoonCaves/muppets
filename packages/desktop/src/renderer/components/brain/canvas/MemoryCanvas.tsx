@@ -388,13 +388,18 @@ export default function MemoryCanvas({ nodes, edges, isDark = true, onNodeSelect
         let found: CanvasNode | null = null;
         for (const node of memoryNodesRef.current) {
           const d = p.dist(worldPos.x, worldPos.y, node.pos.x, node.pos.y);
-          if (d < node.size * 2) { found = node; break; }
+          const hitRadius = Math.max(node.size * 3, 15);
+          if (d < hitRadius) { found = node; break; }
         }
         const currentId = hoveredNodeRef.current?.memoryId;
         const foundId = found?.memoryId;
         if (foundId !== currentId) {
           hoveredNodeRef.current = found;
           setHoveredNode(found);
+          // Change cursor
+          if (containerRef.current) {
+            containerRef.current.style.cursor = found ? 'pointer' : (isDraggingRef.current ? 'grabbing' : 'grab');
+          }
         }
       };
 
@@ -427,45 +432,14 @@ export default function MemoryCanvas({ nodes, edges, isDark = true, onNodeSelect
         drawClusters();
         drawMemoryNodes();
         p.pop();
-        checkHover();
+        // Hover handled by native mousemove on container
       };
 
-      // ── mousePressed (from arcana page.tsx:1269-1290) ──
-      p.mousePressed = () => {
-        const worldPos = screenToWorld(p.mouseX, p.mouseY);
-        let clickedNode: CanvasNode | null = null;
-        for (const node of memoryNodesRef.current) {
-          const d = p.dist(worldPos.x, worldPos.y, node.pos.x, node.pos.y);
-          if (d < node.size * 2) { clickedNode = node; break; }
-        }
-        if (clickedNode) {
-          setSelectedNode(clickedNode);
-          clickedNode.lastAccessed = Date.now();
-          const dto = nodesDataRef.current.find(n => n.id === clickedNode!.memoryData.id);
-          onNodeSelectRef.current?.(dto ?? null);
-        } else {
-          isDraggingRef.current = true;
-          setIsDragging(true);
-          dragStartRef.current = { x: p.mouseX - cameraRef.current.x, y: p.mouseY - cameraRef.current.y };
-        }
-      };
+      // ── mousePressed ──
+      // Using native click handler instead of p5's mousePressed for reliability
 
-      // ── mouseDragged (from arcana page.tsx:1292-1297) ──
-      p.mouseDragged = () => {
-        if (isDraggingRef.current && !hoveredNodeRef.current) {
-          cameraRef.current.x = p.mouseX - dragStartRef.current.x;
-          cameraRef.current.y = p.mouseY - dragStartRef.current.y;
-        }
-      };
-
-      // ── mouseReleased ──
-      p.mouseReleased = () => {
-        isDraggingRef.current = false;
-        setIsDragging(false);
-      };
-
-      // NOTE: mouseWheel is handled via native addEventListener below
-      // to avoid p5's global preventDefault which breaks page scrolling
+      // All mouse interaction handled via native DOM events below for
+      // reliability in Electron (p5's handlers can be unreliable)
 
       // ── windowResized ──
       p.windowResized = () => {
@@ -481,15 +455,90 @@ export default function MemoryCanvas({ nodes, edges, isDark = true, onNodeSelect
     const p5Instance = new p5(sketch, container);
     p5Ref.current = p5Instance;
 
-    // Handle wheel zoom on canvas container only (not via p5 which uses global listeners)
+    // ── All mouse interaction via native DOM events ──
+
+    const screenToWorldDOM = (clientX: number, clientY: number) => {
+      const rect = container.getBoundingClientRect();
+      const canvasX = clientX - rect.left;
+      const canvasY = clientY - rect.top;
+      const camera = cameraRef.current;
+      return {
+        x: (canvasX - camera.x) / camera.zoom,
+        y: (canvasY - camera.y) / camera.zoom,
+      };
+    };
+
+    const findNodeAt = (clientX: number, clientY: number): CanvasNode | null => {
+      const world = screenToWorldDOM(clientX, clientY);
+      for (const node of memoryNodesRef.current) {
+        const dx = node.pos.x - world.x;
+        const dy = node.pos.y - world.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const hitRadius = Math.max(node.size * 3, 15);
+        if (dist < hitRadius) return node;
+      }
+      return null;
+    };
+
+    let didDrag = false;
+
+    const onMouseDown = (e: MouseEvent) => {
+      didDrag = false;
+      isDraggingRef.current = true;
+      dragStartRef.current = { x: e.clientX - cameraRef.current.x, y: e.clientY - cameraRef.current.y };
+    };
+
+    // Click fires after mouseup — only if mouse didn't move (no drag)
+    const onClick = (e: MouseEvent) => {
+      if (didDrag) return;
+      const node = findNodeAt(e.clientX, e.clientY);
+      if (node) {
+        node.lastAccessed = Date.now();
+        onNodeSelectRef.current?.(node.memoryData);
+      } else {
+        onNodeSelectRef.current?.(null);
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      // Pan
+      if (isDraggingRef.current) {
+        const dx = e.clientX - (dragStartRef.current.x + cameraRef.current.x);
+        const dy = e.clientY - (dragStartRef.current.y + cameraRef.current.y);
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didDrag = true;
+        cameraRef.current.x = e.clientX - dragStartRef.current.x;
+        cameraRef.current.y = e.clientY - dragStartRef.current.y;
+      }
+      // Hover detection
+      const node = findNodeAt(e.clientX, e.clientY);
+      const prevId = hoveredNodeRef.current?.memoryId;
+      const newId = node?.memoryId;
+      if (newId !== prevId) {
+        hoveredNodeRef.current = node;
+        setHoveredNode(node);
+        container.style.cursor = node ? 'pointer' : (isDraggingRef.current ? 'grabbing' : 'grab');
+      }
+    };
+
+    const onMouseUp = () => {
+      isDraggingRef.current = false;
+      setIsDragging(false);
+      container.style.cursor = hoveredNodeRef.current ? 'pointer' : 'grab';
+    };
+
     const onWheel = (e: WheelEvent) => {
-      e.preventDefault(); // only on the canvas
+      e.preventDefault();
       e.stopPropagation();
       const zoomSensitivity = 0.001;
       const zoomDelta = -e.deltaY * zoomSensitivity;
       cameraRef.current.targetZoom *= (1 + zoomDelta);
       cameraRef.current.targetZoom = Math.max(0.3, Math.min(3.0, cameraRef.current.targetZoom));
     };
+
+    container.addEventListener('mousedown', onMouseDown);
+    container.addEventListener('mousemove', onMouseMove);
+    container.addEventListener('mouseup', onMouseUp);
+    container.addEventListener('click', onClick);
     container.addEventListener('wheel', onWheel, { passive: false });
 
     const observer = new ResizeObserver(() => {
@@ -501,6 +550,10 @@ export default function MemoryCanvas({ nodes, edges, isDark = true, onNodeSelect
     observer.observe(container);
 
     return () => {
+      container.removeEventListener('mousedown', onMouseDown);
+      container.removeEventListener('mousemove', onMouseMove);
+      container.removeEventListener('mouseup', onMouseUp);
+      container.removeEventListener('click', onClick);
       container.removeEventListener('wheel', onWheel);
       observer.disconnect();
       p5Instance.remove();

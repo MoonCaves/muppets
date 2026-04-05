@@ -79,12 +79,12 @@ export default function MemoryBlocks() {
 
   return (
     <>
-      <div className="border p-3" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-[9px] tracking-[2px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>MEMORY_BLOCKS</span>
-          <span className="text-[9px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{BLOCKS.length}</span>
+      <div style={{ border: '1px solid var(--border-color)', padding: '12px', background: 'var(--bg-primary)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+          <span style={{ fontSize: '9px', letterSpacing: '2px', color: 'var(--fg-tertiary)', fontFamily: 'var(--font-mono)' }}>MEMORY_BLOCKS</span>
+          <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{BLOCKS.length}</span>
         </div>
-        <div className="space-y-2">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {BLOCKS.map(name => {
             const block = blocks[name];
             const meta = BLOCK_META[name];
@@ -92,8 +92,7 @@ export default function MemoryBlocks() {
               <div
                 key={name}
                 onClick={() => setEditing(name)}
-                className="border p-2.5 cursor-pointer transition-colors"
-                style={{ borderColor: 'var(--border-color)', background: 'var(--bg-primary)' }}
+                style={{ border: '1px solid var(--border-color)', padding: '10px', cursor: 'pointer', background: 'var(--bg-secondary)', transition: 'border-color 150ms' }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = `${meta.color}40`)}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border-color)')}
               >

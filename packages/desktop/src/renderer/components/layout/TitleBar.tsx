@@ -1,12 +1,11 @@
 /**
- * Minimal title bar that blends with the app.
- * Stoplight buttons are native (hiddenInset). Title bar is just a
- * draggable strip with agent name, theme toggle, and agent switcher.
- * Matches Samantha WindowControls pattern: 36px height, bg-secondary,
- * emerald title, icon buttons on right.
+ * Title bar — blends with app, Samantha-style.
+ * Agent name center, theme toggle + agent switcher on right.
+ * Uses lucide-react icons matching Samantha.
  */
 
 import { useState, useEffect } from 'react';
+import { Moon, Sun, ChevronDown } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export default function TitleBar() {
@@ -51,69 +50,63 @@ export default function TitleBar() {
 
   return (
     <div
-      className="flex items-center h-[36px] px-3 relative"
       style={{
-        WebkitAppRegion: 'drag' as any,
+        display: 'flex',
+        alignItems: 'center',
+        height: '36px',
+        padding: '0 12px',
         background: 'var(--bg-secondary)',
         borderBottom: '1px solid var(--border-color)',
+        WebkitAppRegion: 'drag' as any,
+        position: 'relative',
       }}
     >
-      {/* Spacer for native macOS stoplight buttons (hiddenInset) */}
-      <div className="w-[70px] flex-shrink-0" />
+      {/* Spacer for native macOS stoplight buttons */}
+      <div style={{ width: '70px', flexShrink: 0 }} />
 
-      {/* Center: Agent name — clickable dropdown */}
-      <div className="flex-1 flex items-center justify-center">
+      {/* Center: Agent name dropdown */}
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <button
           onClick={() => setShowMenu(!showMenu)}
-          className="flex items-center gap-1"
-          style={{ WebkitAppRegion: 'no-drag' as any, background: 'transparent', border: 'none', cursor: 'pointer' }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '4px',
+            WebkitAppRegion: 'no-drag' as any,
+            background: 'transparent', border: 'none', cursor: 'pointer',
+          }}
         >
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '0.15em', color: 'var(--accent-emerald)', textTransform: 'uppercase' }}>
             {`// ${agentName}`}
           </span>
-          <span style={{ fontSize: '7px', color: 'var(--fg-muted)', marginLeft: '4px' }}>{'\u25BE'}</span>
+          <ChevronDown size={10} style={{ color: 'var(--fg-muted)' }} />
         </button>
       </div>
 
       {/* Right: Theme toggle */}
-      <div className="flex items-center gap-2 w-[70px] justify-end" style={{ WebkitAppRegion: 'no-drag' as any }}>
+      <div style={{ width: '70px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', WebkitAppRegion: 'no-drag' as any }}>
         <button
           onClick={toggleTheme}
           title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           style={{
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: '12px',
-            color: 'var(--fg-muted)',
-            opacity: 0.4,
-            width: '20px',
-            height: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: 'var(--fg-muted)', opacity: 0.4,
+            width: '20px', height: '20px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'opacity 150ms',
           }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.4')}
         >
-          {isDark ? '\u263E' : '\u2600'}
+          {isDark ? <Moon size={12} /> : <Sun size={12} />}
         </button>
       </div>
 
       {/* Dropdown */}
       {showMenu && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-          <div
-            className="absolute top-full left-1/2 -translate-x-1/2 z-50 border py-1 min-w-[200px]"
-            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-color)', WebkitAppRegion: 'no-drag' as any }}
-          >
-            <button onClick={switchAgent} className="w-full text-left px-3 py-1.5 text-[11px]" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-secondary)', background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}>
-              Switch Agent...
-            </button>
-            <button onClick={createNewAgent} className="w-full text-left px-3 py-1.5 text-[11px]" style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-emerald)', background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}>
-              + Create New Agent
-            </button>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setShowMenu(false)} />
+          <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', zIndex: 50, border: '1px solid var(--border-color)', background: 'var(--bg-elevated)', padding: '4px 0', minWidth: '200px', WebkitAppRegion: 'no-drag' as any }}>
+            <button onClick={switchAgent} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 12px', fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--fg-secondary)', background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}>Switch Agent...</button>
+            <button onClick={createNewAgent} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 12px', fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--accent-emerald)', background: 'transparent', border: 'none', cursor: 'pointer' }} onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-tertiary)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}>+ Create New Agent</button>
           </div>
         </>
       )}

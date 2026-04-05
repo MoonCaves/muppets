@@ -82,25 +82,19 @@ export default function BrainView() {
               <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Loading graph...</span>
             </div>
           ) : (
-            <div style={{ height: '100%', display: 'flex' }}>
-              <div style={{ flex: 1 }}>
-                <MemoryCanvas nodes={graphData.nodes} edges={graphData.edges} onNodeSelect={setSelectedNode} />
-              </div>
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+              <MemoryCanvas nodes={graphData.nodes} edges={graphData.edges} onNodeSelect={setSelectedNode} />
               {selectedNode && (
-                <div style={{ width: '280px', borderLeft: '1px solid var(--border-color)', padding: '12px', overflowY: 'auto', background: 'var(--bg-secondary)' }}>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="section-title" style={{ color: 'var(--accent-violet)' }}>{'// ENTITY'}</span>
-                    <button onClick={() => setSelectedNode(null)} style={{ fontSize: '9px', color: 'var(--fg-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Close</button>
-                  </div>
-                  <div style={{ fontSize: '13px', fontWeight: 'bold', fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)', marginBottom: '4px' }}>{selectedNode.name}</div>
-                  <div style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--accent-cyan)', marginBottom: '12px' }}>{selectedNode.type}</div>
-                  <div className="grid gap-2" style={{ fontSize: '11px', color: 'var(--fg-secondary)' }}>
-                    <div><span style={{ color: 'var(--fg-muted)' }}>Mentions:</span> {selectedNode.mention_count}</div>
-                    <div><span style={{ color: 'var(--fg-muted)' }}>Priority:</span> {(selectedNode.priority * 100).toFixed(0)}%</div>
-                    <div><span style={{ color: 'var(--fg-muted)' }}>Tier:</span> {selectedNode.tier}</div>
-                    <div><span style={{ color: 'var(--fg-muted)' }}>Last seen:</span> {new Date(selectedNode.last_seen).toLocaleDateString()}</div>
-                  </div>
-                </div>
+                <GraphEntityDetail
+                  entity={selectedNode}
+                  serverUrl={serverUrl}
+                  apiToken={apiToken}
+                  onClose={() => setSelectedNode(null)}
+                  onNavigate={(id) => {
+                    const node = graphData.nodes.find(n => n.id === id);
+                    if (node) setSelectedNode(node);
+                  }}
+                />
               )}
             </div>
           )
@@ -335,6 +329,136 @@ function SearchView({ serverUrl, apiToken }: { serverUrl: string; apiToken: stri
         })}
         {!loading && results.length === 0 && query && <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>No results found</span>}
         {!query && <span style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Enter a query to search across all memories — conversations, notes, entity facts, and brain documents</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── Graph Entity Detail Sidebar ──
+
+const TYPE_COLORS_DETAIL: Record<string, string> = {
+  person: '#10b981', company: '#22d3ee', project: '#14b8a6', place: '#a855f7', topic: '#f59e0b',
+};
+
+function GraphEntityDetail({ entity, serverUrl, apiToken, onClose, onNavigate }: {
+  entity: GraphNodeDTO;
+  serverUrl: string;
+  apiToken: string | null;
+  onClose: () => void;
+  onNavigate: (id: number) => void;
+}) {
+  const [context, setContext] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    brainFetch<any>(serverUrl, apiToken, `/entities/${entity.id}`)
+      .then(d => setContext(d))
+      .catch(() => setContext(null))
+      .finally(() => setLoading(false));
+  }, [entity.id, serverUrl, apiToken]);
+
+  const typeColor = TYPE_COLORS_DETAIL[entity.type] || '#71717a';
+
+  return (
+    <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: '340px', borderLeft: '1px solid var(--border-color)', overflowY: 'auto', background: 'var(--bg-primary)', zIndex: 10 }}>
+      <div style={{ padding: '16px' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+          <span className="section-title" style={{ color: 'var(--accent-violet)' }}>{'// ENTITY'}</span>
+          <button onClick={onClose} style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Close</button>
+        </div>
+
+        {/* Name + Type */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+          <div style={{ fontSize: '16px', fontWeight: 'bold', fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)' }}>{entity.name}</div>
+          <span style={{ fontSize: '8px', padding: '1px 6px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', color: typeColor, background: `${typeColor}15`, border: `1px solid ${typeColor}40` }}>{entity.type}</span>
+        </div>
+        {entity.tier && <span style={{ fontSize: '8px', padding: '1px 6px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', color: 'var(--status-warning)', background: 'rgba(245,158,11,0.1)' }}>{entity.tier}</span>}
+
+        {/* Stats */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '12px', marginBottom: '16px' }}>
+          {[['MENTIONS', entity.mention_count], ['PRIORITY', `${(entity.priority * 100).toFixed(0)}%`], ['FIRST SEEN', context?.entity?.first_seen ? new Date(context.entity.first_seen).toLocaleDateString() : '—'], ['LAST SEEN', new Date(entity.last_seen).toLocaleDateString()]].map(([label, value]) => (
+            <div key={label as string}>
+              <div style={{ fontSize: '7px', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginBottom: '2px' }}>{label}</div>
+              <div style={{ fontSize: '13px', fontWeight: 'bold', fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)' }}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Confidence bar */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '7px', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginBottom: '4px' }}>CONFIDENCE</div>
+          <div style={{ height: '4px', width: '100%', background: 'var(--bg-tertiary)' }}>
+            <div style={{ height: '100%', width: `${entity.priority * 100}%`, background: entity.priority >= 0.7 ? '#10b981' : entity.priority >= 0.4 ? '#f59e0b' : '#ef4444' }} />
+          </div>
+        </div>
+
+        {loading && <div style={{ fontSize: '11px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Loading details...</div>}
+
+        {context && (
+          <>
+            {/* Contradictions */}
+            {context.contradictions && context.contradictions.length > 0 && (
+              <div style={{ marginBottom: '16px', padding: '8px', border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.05)' }}>
+                <div style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', color: '#f59e0b', fontFamily: 'var(--font-mono)', marginBottom: '8px' }}>{`// CONTRADICTIONS (${context.contradictions.length})`}</div>
+                {context.contradictions.map((c: any, i: number) => (
+                  <div key={i} style={{ fontSize: '11px', color: 'var(--fg-secondary)', marginBottom: '4px' }}>{c.description || c.fact_a || JSON.stringify(c).slice(0, 150)}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Facts */}
+            {context.facts && context.facts.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)', marginBottom: '8px' }}>{`// FACTS (${context.facts.length})`}</div>
+                {context.facts.map((f: any, i: number) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', paddingBottom: '6px', marginBottom: '6px', borderBottom: '1px solid var(--border-color)' }}>
+                    <span style={{ fontSize: '7px', padding: '1px 4px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', color: f.source_type === 'corrected' ? '#10b981' : f.source_type === 'confirmed' ? '#22d3ee' : 'var(--fg-muted)', background: f.source_type === 'corrected' ? 'rgba(16,185,129,0.1)' : f.source_type === 'confirmed' ? 'rgba(34,211,238,0.1)' : 'var(--bg-tertiary)', flexShrink: 0, marginTop: '2px' }}>{(f.source_type || 'fact').slice(0, 5)}</span>
+                    <span style={{ fontSize: '11px', color: 'var(--fg-secondary)' }}>{f.content || f.fact || JSON.stringify(f).slice(0, 200)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Relationships */}
+            {context.related_entities && context.related_entities.length > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)', marginBottom: '8px' }}>{`// RELATIONSHIPS (${context.related_entities.length})`}</div>
+                {context.related_entities.map((rel: any, i: number) => {
+                  const relEntity = rel.entity || rel;
+                  const relName = relEntity.name || 'Unknown';
+                  const relType = relEntity.type || 'default';
+                  const relColor = TYPE_COLORS_DETAIL[relType] || '#71717a';
+                  return (
+                    <div key={i} onClick={() => relEntity.id && onNavigate(relEntity.id)} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0', cursor: 'pointer' }}>
+                      <span style={{ fontSize: '8px', padding: '1px 4px', fontFamily: 'var(--font-mono)', color: 'var(--accent-violet)', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)' }}>{rel.relationship || 'related'}</span>
+                      <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: relColor }}>{relName}</span>
+                      <span style={{ fontSize: '8px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>({relType})</span>
+                      {rel.strength && <span style={{ fontSize: '8px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', marginLeft: 'auto' }}>×{rel.strength}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Mentions */}
+            {context.mentions && context.mentions.length > 0 && (
+              <div>
+                <div style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', color: '#14b8a6', fontFamily: 'var(--font-mono)', marginBottom: '8px' }}>{`// MENTIONS (${context.mentions.length})`}</div>
+                {context.mentions.slice(0, 15).map((m: any, i: number) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', paddingBottom: '6px' }}>
+                    <div style={{ width: '4px', height: '4px', borderRadius: '9999px', background: 'var(--accent-emerald)', marginTop: '5px', flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: '8px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{new Date(m.timestamp || m.created_at).toLocaleString()}</div>
+                      <div style={{ fontSize: '10px', color: 'var(--fg-secondary)' }}>{(m.context || m.content || '').slice(0, 200)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

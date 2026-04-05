@@ -63,9 +63,9 @@ export default function SessionList({ currentSessionId, onSelectSession, onNewSe
   if (loading) return <div className="text-[9px] animate-pulse" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>LOADING_SESSIONS...</div>;
 
   return (
-    <div className="border p-3" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[9px] tracking-[2px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>RECENT_SESSIONS</span>
+    <div style={{ border: '1px solid var(--border-color)', padding: '12px', background: 'var(--bg-primary)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        <span style={{ fontSize: '9px', letterSpacing: '2px', color: 'var(--fg-tertiary)', fontFamily: 'var(--font-mono)' }}>RECENT_SESSIONS</span>
         <button
           onClick={onNewSession}
           className="text-[9px] tracking-[1px]"
@@ -81,17 +81,19 @@ export default function SessionList({ currentSessionId, onSelectSession, onNewSe
         <p className="text-[10px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-sans)', fontWeight: 300 }}>No conversations yet</p>
       )}
 
-      <div className="space-y-1.5">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {withMessages.slice(0, 8).map(session => (
           <div
             key={session.id}
             onClick={() => onSelectSession(session.id)}
-            className="border p-2 cursor-pointer transition-colors"
             style={{
-              borderColor: currentSessionId === session.id ? 'rgba(139,92,246,0.3)' : 'var(--border-color)',
-              background: currentSessionId === session.id ? 'rgba(139,92,246,0.05)' : 'var(--bg-primary)',
+              border: `1px solid ${currentSessionId === session.id ? 'rgba(139,92,246,0.3)' : 'var(--border-color)'}`,
+              padding: '8px',
+              cursor: 'pointer',
+              background: currentSessionId === session.id ? 'rgba(139,92,246,0.05)' : 'var(--bg-secondary)',
+              transition: 'border-color 150ms',
             }}
-            onMouseEnter={(e) => { if (currentSessionId !== session.id) e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; }}
+            onMouseEnter={(e) => { if (currentSessionId !== session.id) e.currentTarget.style.borderColor = 'var(--border-color-hover)'; }}
             onMouseLeave={(e) => { if (currentSessionId !== session.id) e.currentTarget.style.borderColor = 'var(--border-color)'; }}
           >
             <p className="text-[11px] truncate mb-0.5" style={{ fontFamily: 'var(--font-sans)', fontWeight: 400, color: 'var(--fg-primary)' }}>

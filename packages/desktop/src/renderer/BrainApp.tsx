@@ -27,7 +27,7 @@ export default function BrainApp() {
   useEffect(() => { loadGraph(); }, [loadGraph]);
 
   return (
-    <div style={{ height: '100%', width: '100%', background: '#0a0a0a' }}>
+    <div style={{ height: '100%', width: '100%', background: 'var(--bg-primary)' }}>
       {loading ? (
         <div className="h-full flex items-center justify-center">
           <span className="text-[11px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Loading brain graph...</span>

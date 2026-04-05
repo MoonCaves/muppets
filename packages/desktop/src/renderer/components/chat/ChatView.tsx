@@ -210,11 +210,11 @@ export default function ChatView() {
   };
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', background: 'var(--bg-primary)' }}>
-      {/* Main chat area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, borderRight: '1px solid var(--border-color)' }}>
-        {/* Chat header */}
-        <div className="border-b p-3 flex items-center gap-3" style={{ borderColor: 'var(--border-color)' }}>
+    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex' }}>
+      {/* Main chat area — white bg in light mode for clean reading */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, borderRight: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+        {/* Chat header — cream in light mode to frame the white message area */}
+        <div style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}>
           <div className="w-8 h-8 border flex items-center justify-center" style={{ borderColor: 'rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.1)' }}>
             <span className="text-[14px]" style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, color: '#8b5cf6' }}>
               {agentName.charAt(0).toUpperCase()}
@@ -317,16 +317,15 @@ export default function ChatView() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="border-t p-3 flex gap-2" style={{ borderColor: 'var(--border-color)' }}>
+      {/* Input bar — cream to match header, framing the white chat */}
+      <div style={{ borderTop: '1px solid var(--border-color)', padding: '12px', display: 'flex', gap: '8px', background: 'var(--bg-primary)' }}>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
           placeholder={`Message ${agentName}...`}
           disabled={streaming}
-          className="flex-1 px-3 py-2 text-[13px] outline-none"
-          style={{ fontFamily: 'var(--font-mono)', background: 'var(--bg-secondary)', color: 'var(--fg-primary)', border: '1px solid var(--border-color)' }}
+          style={{ flex: 1, padding: '8px 12px', fontSize: '13px', fontFamily: 'var(--font-mono)', background: 'var(--bg-tertiary)', color: 'var(--fg-primary)', border: '1px solid var(--border-color)', outline: 'none' }}
           autoFocus
         />
         {streaming ? (
