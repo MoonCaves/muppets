@@ -464,14 +464,8 @@ export default function MemoryCanvas({ nodes, edges, isDark = true, onNodeSelect
         setIsDragging(false);
       };
 
-      // ── mouseWheel (from arcana page.tsx:1303-1309) ──
-      (p as any).mouseWheel = (event: any) => {
-        const zoomSensitivity = 0.001;
-        const zoomDelta = -event.delta * zoomSensitivity;
-        cameraRef.current.targetZoom *= (1 + zoomDelta);
-        cameraRef.current.targetZoom = p.constrain(cameraRef.current.targetZoom, 0.3, 3.0);
-        return false;
-      };
+      // NOTE: mouseWheel is handled via native addEventListener below
+      // to avoid p5's global preventDefault which breaks page scrolling
 
       // ── windowResized ──
       p.windowResized = () => {
@@ -483,19 +477,31 @@ export default function MemoryCanvas({ nodes, edges, isDark = true, onNodeSelect
       };
     };
 
-    const p5Instance = new p5(sketch, containerRef.current);
+    const container = containerRef.current;
+    const p5Instance = new p5(sketch, container);
     p5Ref.current = p5Instance;
 
-    // Also handle resize via ResizeObserver for more reliable sizing
+    // Handle wheel zoom on canvas container only (not via p5 which uses global listeners)
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault(); // only on the canvas
+      e.stopPropagation();
+      const zoomSensitivity = 0.001;
+      const zoomDelta = -e.deltaY * zoomSensitivity;
+      cameraRef.current.targetZoom *= (1 + zoomDelta);
+      cameraRef.current.targetZoom = Math.max(0.3, Math.min(3.0, cameraRef.current.targetZoom));
+    };
+    container.addEventListener('wheel', onWheel, { passive: false });
+
     const observer = new ResizeObserver(() => {
       if (p5Ref.current && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         p5Ref.current.resizeCanvas(rect.width, rect.height);
       }
     });
-    observer.observe(containerRef.current);
+    observer.observe(container);
 
     return () => {
+      container.removeEventListener('wheel', onWheel);
       observer.disconnect();
       p5Instance.remove();
       p5Ref.current = null;
