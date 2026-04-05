@@ -142,14 +142,14 @@ export default function DashboardView() {
         <div ref={logContainerRef} className="mt-2 border" style={{ maxHeight: '300px', overflowY: 'auto', overflowX: 'auto', borderColor: 'var(--border-color)', background: '#0a0a0a' }}>
           <div style={{ padding: '8px', minWidth: '700px' }}>
             {logs.length === 0 && (
-              <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+              <span style={{ fontSize: '9px', color: 'var(--fg-muted)', fontFamily: 'Menlo, Monaco, Consolas, monospace' }}>
                 {isRunning ? 'Waiting for log output...' : 'Start services to see logs'}
               </span>
             )}
             {logs.map((line, i) => (
               <div
                 key={i}
-                style={{ fontSize: '11px', lineHeight: '16px', whiteSpace: 'pre', fontFamily: 'var(--font-mono)' }}
+                style={{ fontSize: '12px', lineHeight: '17px', whiteSpace: 'pre', fontFamily: 'Menlo, Monaco, Consolas, monospace' }}
                 dangerouslySetInnerHTML={{ __html: ansiConverter.toHtml(line) }}
               />
             ))}
