@@ -220,8 +220,6 @@ export class ClaudeClient {
 
   private completeSubprocess(prompt: string, opts: CompleteOptions): Promise<string> {
     return new Promise((resolve, reject) => {
-      // Build flags first, then use '--' to separate the prompt
-      // (prompts starting with '---' confuse CLI option parsers)
       const args = ['-p'];
       if (opts.system) {
         args.push('--system-prompt', opts.system);
@@ -232,8 +230,9 @@ export class ClaudeClient {
       if (opts.maxTurns) {
         args.push('--max-turns', String(opts.maxTurns));
       }
-      args.push('--', prompt);
 
+      // Pipe prompt via stdin instead of CLI args to avoid ARG_MAX limits
+      // (large conversation histories + system prompts easily exceed 256KB)
       const proc = spawn('claude', args, {
         env: {
           ...process.env,
@@ -241,8 +240,13 @@ export class ClaudeClient {
           CLAUDECODE: '',
           CLAUDE_CODE_ENTRYPOINT: '',
         },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
+
+      if (proc.stdin) {
+        proc.stdin.write(prompt);
+        proc.stdin.end();
+      }
 
       const chunks: Buffer[] = [];
       const errChunks: Buffer[] = [];

@@ -85,6 +85,7 @@ export class WhatsAppChannel implements Channel {
             const reply = await client.complete(prompt, {
               system: systemPrompt,
               maxTurns: 30,
+              subprocess: true,
             });
 
             // Track both sides in history

@@ -36,6 +36,7 @@ export async function spawnAgent(name: string, prompt: string): Promise<AgentSpa
     model: agent.model as CompleteOptions['model'],
     system: systemPrompt,
     maxTurns: agent.maxTurns,
+    subprocess: true,
   };
 
   logger.info(`Spawning agent: ${name}`, { model: agent.model, maxTurns: agent.maxTurns });
