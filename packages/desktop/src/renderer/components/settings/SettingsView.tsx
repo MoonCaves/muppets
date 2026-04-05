@@ -12,12 +12,33 @@ export default function SettingsView() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [isDark, setIsDark] = useState(true);
+  const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!kb) return;
     kb.config.readIdentity().then((id: IdentityConfig | null) => setIdentity(id));
     kb.config.readEnv().then((e: EnvConfig) => setEnv(e));
-    setIsDark(document.documentElement.classList.contains('dark'));
+    setIsDark(!document.documentElement.classList.contains('light'));
+  }, []);
+
+  // Poll tunnel status
+  useEffect(() => {
+    const fetchTunnel = async () => {
+      try {
+        const token = await kb?.config.getApiToken();
+        const url = await kb?.config.getServerUrl();
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch(`${url}/api/web/manage/tunnel`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setTunnelUrl(data.url);
+        }
+      } catch {}
+    };
+    fetchTunnel();
+    const timer = setInterval(fetchTunnel, 10_000);
+    return () => clearInterval(timer);
   }, []);
 
   const save = async (type: string, fn: () => Promise<void>) => {
@@ -113,17 +134,34 @@ export default function SettingsView() {
       </div>
 
       {/* Tunnel / ngrok */}
-      <span className="section-title" style={{ color: 'var(--accent-teal, var(--accent-cyan))' }}>{'// TUNNEL'}</span>
+      <span className="section-title" style={{ color: 'var(--accent-cyan)' }}>{'// TUNNEL'}</span>
       <div className="grid gap-3 mt-3 mb-6">
-        <div><label style={labelStyle}>ngrok Auth Token</label><input type="password" value={env['NGROK_AUTHTOKEN'] || ''} onChange={(e) => setEnv({ ...env, NGROK_AUTHTOKEN: e.target.value })} style={inputStyle} placeholder="Paste your ngrok auth token" /></div>
-        {identity.tunnel?.enabled && env['NGROK_AUTHTOKEN'] && (
-          <div className="p-2 border" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-            <div className="text-[9px] tracking-[1px] uppercase mb-1" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>Tunnel Status</div>
-            <div className="text-[11px]" style={{ color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)' }}>
-              Tunnel will start when services are running. Check dashboard for URL.
+        {tunnelUrl && (
+          <div className="p-3 border" style={{ borderColor: 'rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.05)' }}>
+            <div className="text-[9px] tracking-[1px] uppercase mb-1" style={{ color: 'var(--accent-emerald)', fontFamily: 'var(--font-mono)' }}>TUNNEL ACTIVE</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={tunnelUrl}
+                readOnly
+                style={{ ...inputStyle, flex: 1, userSelect: 'text', WebkitUserSelect: 'text' } as any}
+              />
+              <button
+                onClick={() => { navigator.clipboard.writeText(tunnelUrl); setMessage('Tunnel URL copied'); setTimeout(() => setMessage(''), 2000); }}
+                className="px-2 text-[9px] tracking-[1px] uppercase border whitespace-nowrap"
+                style={{ fontFamily: 'var(--font-mono)', borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)', background: 'transparent', cursor: 'pointer' }}
+              >
+                Copy
+              </button>
             </div>
           </div>
         )}
+        {!tunnelUrl && (
+          <div className="p-2 text-[11px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
+            No active tunnel. Enable tunnel in Server config above and ensure ngrok is configured.
+          </div>
+        )}
+        <div><label style={labelStyle}>ngrok Auth Token (if not globally configured)</label><input type="password" value={env['NGROK_AUTHTOKEN'] || ''} onChange={(e) => setEnv({ ...env, NGROK_AUTHTOKEN: e.target.value })} style={inputStyle} placeholder="Leave blank if ngrok is already configured globally" /></div>
       </div>
 
       {/* Backup Config */}

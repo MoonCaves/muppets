@@ -25,7 +25,10 @@ export default function BrainView() {
       setGraphData(data);
       setError(null);
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).name === 'AbortError'
+        ? 'Brain API timed out — the entity graph database may be busy. Try again.'
+        : (err as Error).message;
+      setError(msg);
     } finally {
       setLoading(false);
     }
