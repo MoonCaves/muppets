@@ -269,11 +269,22 @@ export class LifecycleManager extends EventEmitter {
       '/bin',
     ];
 
-    // Find actual nvm node version dirs
+    // Find nvm node versions — put the HIGHEST version first
+    // (kyberbot is compiled against the latest node, better-sqlite3
+    // native module must match the node version that runs it)
     const nvmDir = join(home, '.nvm/versions/node');
     const nvmPaths: string[] = [];
     try {
-      const versions = require('fs').readdirSync(nvmDir);
+      const versions = require('fs').readdirSync(nvmDir) as string[];
+      // Sort descending so newest node is first on PATH
+      versions.sort((a: string, b: string) => {
+        const va = a.replace('v', '').split('.').map(Number);
+        const vb = b.replace('v', '').split('.').map(Number);
+        for (let i = 0; i < 3; i++) {
+          if ((vb[i] || 0) !== (va[i] || 0)) return (vb[i] || 0) - (va[i] || 0);
+        }
+        return 0;
+      });
       for (const v of versions) {
         nvmPaths.push(join(nvmDir, v, 'bin'));
       }
