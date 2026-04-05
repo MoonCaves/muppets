@@ -6,7 +6,6 @@ const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'chat', label: 'Chat' },
   { id: 'skills', label: 'Skills' },
-  { id: 'agents', label: 'Agents' },
   { id: 'channels', label: 'Channels' },
   { id: 'heartbeat', label: 'Heartbeat' },
   { id: 'brain', label: 'Brain' },

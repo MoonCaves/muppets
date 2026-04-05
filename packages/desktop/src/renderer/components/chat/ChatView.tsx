@@ -3,8 +3,10 @@
  * Shows tool calls, thinking status, agent name from identity.
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
+import MemoryBlocks from './MemoryBlocks';
+import SessionList from './SessionList';
 
 interface ToolCall {
   id: string;
@@ -48,16 +50,46 @@ export default function ChatView() {
   const [streamText, setStreamText] = useState('');
   const [streamStatus, setStreamStatus] = useState('');
   const [streamTools, setStreamTools] = useState<ToolCall[]>([]);
+  const [sessionId, setSessionId] = useState<string | undefined>(undefined);
+  const [claudeModel, setClaudeModel] = useState('opus');
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Load agent name from identity
+  // Load agent name and model from identity
   useEffect(() => {
     const kb = (window as any).kyberbot;
     if (!kb) return;
     kb.config.readIdentity().then((id: any) => {
       if (id?.agent_name) setAgentName(id.agent_name);
+      if (id?.claude?.model) setClaudeModel(id.claude.model);
     });
+  }, []);
+
+  // Load session messages
+  const loadSession = useCallback(async (id: string) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
+      const res = await fetch(`${serverUrl}/api/web/sessions/${id}/messages`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        const msgs: Message[] = (data.messages || []).map((m: any) => ({
+          role: m.role,
+          content: m.content,
+          toolCalls: m.toolCalls,
+          memoryUpdates: m.memoryUpdates,
+        }));
+        setMessages(msgs);
+        setSessionId(id);
+      }
+    } catch {}
+  }, [serverUrl, apiToken]);
+
+  const startNewSession = useCallback(() => {
+    setMessages([]);
+    setSessionId(undefined);
+    setStreamText('');
+    setStreamTools([]);
   }, []);
 
   useEffect(() => {
@@ -177,9 +209,24 @@ export default function ChatView() {
   };
 
   return (
-    <div className="h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
+    <div className="h-full flex" style={{ background: 'var(--bg-primary)' }}>
+      {/* Main chat area */}
+      <div className="flex-1 flex flex-col border-r" style={{ borderColor: 'var(--border-color)' }}>
+        {/* Chat header */}
+        <div className="border-b p-3 flex items-center gap-3" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="w-8 h-8 border flex items-center justify-center" style={{ borderColor: 'rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.1)' }}>
+            <span className="text-[14px]" style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, color: '#8b5cf6' }}>
+              {agentName.charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <div>
+            <h2 className="text-[14px]" style={{ fontFamily: 'var(--font-sans)', fontWeight: 400, color: 'var(--fg-primary)' }}>{agentName}</h2>
+            <p className="text-[9px] tracking-[1px]" style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{claudeModel.toUpperCase()}</p>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 && !streaming && (
           <div className="flex flex-col items-center justify-center h-full gap-2">
             <span className="text-[20px]" style={{ fontFamily: 'var(--font-sans)', fontWeight: 300, color: 'var(--fg-primary)' }}>
@@ -284,6 +331,17 @@ export default function ChatView() {
         ) : (
           <button onClick={sendMessage} disabled={!input.trim()} className="px-4 py-2 text-[9px] tracking-[1px] uppercase border" style={{ fontFamily: 'var(--font-mono)', borderColor: 'var(--accent-emerald)', color: 'var(--accent-emerald)', background: 'transparent', cursor: 'pointer', opacity: input.trim() ? 1 : 0.3 }}>Send</button>
         )}
+      </div>
+      </div>
+
+      {/* Sidebar — memory blocks, sessions, agent config */}
+      <div className="w-72 overflow-y-auto p-3 space-y-3" style={{ background: 'var(--bg-primary)' }}>
+        <MemoryBlocks />
+        <SessionList
+          currentSessionId={sessionId}
+          onSelectSession={loadSession}
+          onNewSession={startNewSession}
+        />
       </div>
     </div>
   );
