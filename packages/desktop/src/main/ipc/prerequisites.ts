@@ -14,7 +14,7 @@ import { AppStore } from '../store.js';
 function getFullPath(): string {
   const home = process.env.HOME || '';
   const existing = process.env.PATH || '';
-  const extras = ['/usr/local/bin', '/opt/homebrew/bin', join(home, '.npm-global/bin'), '/usr/bin', '/bin'];
+  const extras = [join(home, '.local/bin'), '/usr/local/bin', '/opt/homebrew/bin', join(home, '.npm-global/bin'), '/usr/bin', '/bin'];
   const nvmPaths: string[] = [];
   try {
     const nvmDir = join(home, '.nvm/versions/node');

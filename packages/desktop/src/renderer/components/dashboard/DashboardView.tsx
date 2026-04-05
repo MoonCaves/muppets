@@ -138,7 +138,15 @@ export default function DashboardView() {
 
       {/* Log Viewer — persistent for entire session */}
       <div>
-        <span className="section-title" style={{ color: 'var(--fg-tertiary)' }}>{'// LOGS'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span className="section-title" style={{ color: 'var(--fg-tertiary)' }}>{'// LOGS'}</span>
+          <button
+            onClick={() => { navigator.clipboard.writeText(logs.join('\n')); }}
+            style={{ fontSize: '9px', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)', background: 'transparent', border: 'none', cursor: 'pointer', opacity: logs.length ? 1 : 0.3 }}
+          >
+            Copy
+          </button>
+        </div>
         <div ref={logContainerRef} className="mt-2 border" style={{ maxHeight: '300px', overflowY: 'auto', overflowX: 'auto', borderColor: 'var(--border-color)', background: '#0a0a0a' }}>
           <div style={{ padding: '8px', minWidth: '700px' }}>
             {logs.length === 0 && (

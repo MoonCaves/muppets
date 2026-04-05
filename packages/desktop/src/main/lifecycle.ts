@@ -260,8 +260,7 @@ export class LifecycleManager extends EventEmitter {
     const home = process.env.HOME || '';
     const existing = process.env.PATH || '';
     const extras = [
-      join(home, '.nvm/versions/node', '**', 'bin'), // placeholder
-      join(home, '.nvm/versions/node'),
+      join(home, '.local/bin'),          // claude CLI installs here
       '/usr/local/bin',
       '/opt/homebrew/bin',
       join(home, '.npm-global/bin'),
