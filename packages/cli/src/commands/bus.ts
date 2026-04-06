@@ -44,7 +44,8 @@ function getCurrentAgentName(): string {
 
 async function fleetFetch(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs: number = 5000,
 ): Promise<Response> {
   const port = getFleetPort();
   const token = getApiToken();
@@ -60,7 +61,7 @@ async function fleetFetch(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -96,6 +97,7 @@ export function createBusCommand(): Command {
       const from = options.from || getCurrentAgentName();
 
       try {
+        console.log(DIM(`Sending to ${agent}... (waiting for Claude response)`));
         const res = await fleetFetch('/fleet/bus/send', {
           method: 'POST',
           body: JSON.stringify({
@@ -104,7 +106,7 @@ export function createBusCommand(): Command {
             message,
             topic: options.topic,
           }),
-        });
+        }, 120_000);  // 2 min timeout — Claude needs time to think
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
@@ -152,6 +154,7 @@ export function createBusCommand(): Command {
       const from = options.from || getCurrentAgentName();
 
       try {
+        console.log(DIM(`Broadcasting... (waiting for agent responses)`));
         const res = await fleetFetch('/fleet/bus/broadcast', {
           method: 'POST',
           body: JSON.stringify({
@@ -159,7 +162,7 @@ export function createBusCommand(): Command {
             message,
             topic: options.topic,
           }),
-        });
+        }, 120_000);
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
