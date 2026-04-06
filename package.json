@@ -6,7 +6,6 @@
   "workspaces": [
     "packages/cli",
     "packages/create-kyberbot",
-    "packages/desktop",
     "packages/web"
   ],
   "scripts": {

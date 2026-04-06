@@ -679,6 +679,28 @@ export function createManagementRouter(channels: Channel[]): Router {
     }
   });
 
+  // POST /remember — Store a memory via the running server (avoids subprocess OOM)
+  router.post('/remember', asyncHandler(async (req, res) => {
+    const { text, response, channel } = req.body ?? {};
+    if (!text || typeof text !== 'string') {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
+    try {
+      const root = getRoot();
+      const { storeConversation } = await import('../brain/store-conversation.js');
+      await storeConversation(root, {
+        prompt: text,
+        response: response || '',
+        channel: channel || 'terminal',
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      logger.error('Remember failed', { error: String(err) });
+      res.status(500).json({ error: 'Failed to store memory' });
+    }
+  }));
+
   // GET /logs/:service — Tail service-specific log
   router.get('/logs/:service', (req, res) => {
     try {
