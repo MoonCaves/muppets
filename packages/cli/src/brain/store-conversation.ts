@@ -276,47 +276,53 @@ export async function storeConversation(
 
   logger.info('storeConversation:segments:before', { heapMB: heapMB() });
   // ── Step 2b: Segment-level indexing for fine-grained retrieval ────
-  try {
-    const segments = segmentText(fullText, 250, 50);
-    if (segments.length > 1) { // Only segment if text is long enough to split
-      for (const seg of segments) {
-        const segPath = `${sourcePath}/seg_${seg.index}`;
-        const segId = `${conversationId}_seg_${seg.index}`;
+  // Guard: skip if heap is already above 4GB to prevent OOM crash
+  const currentHeap = heapMB();
+  if (currentHeap > 4096) {
+    logger.warn('Skipping segment indexing — heap too high', { heapMB: currentHeap });
+  } else {
+    try {
+      const segments = segmentText(fullText, 250, 50);
+      if (segments.length > 1) {
+        for (const seg of segments) {
+          const segPath = `${sourcePath}/seg_${seg.index}`;
+          const segId = `${conversationId}_seg_${seg.index}`;
 
-        // Store segment in timeline (for FTS)
-        try {
-          await addConversationToTimeline(
-            root, segId, segPath, timestamp, undefined,
-            fullTitle, seg.text, entityNames, topicNames
-          );
-        } catch {
-          // Segment storage is best-effort
-        }
-
-        // Store segment in ChromaDB (for semantic search)
-        try {
-          if (isChromaAvailable()) {
-            await indexDocument(segId, seg.text, {
-              type: 'conversation',
-              source_path: segPath,
-              title: fullTitle,
-              timestamp,
-              entities: entityNames,
-              topics: topicNames,
-              summary: seg.text,
-            });
+          // Store segment in timeline (for FTS)
+          try {
+            await addConversationToTimeline(
+              root, segId, segPath, timestamp, undefined,
+              fullTitle, seg.text, entityNames, topicNames
+            );
+          } catch {
+            // Segment storage is best-effort
           }
-        } catch {
-          // Segment embedding is best-effort
+
+          // Store segment in ChromaDB (for semantic search) — skip if heap is climbing
+          if (isChromaAvailable() && heapMB() < 6144) {
+            try {
+              await indexDocument(segId, seg.text, {
+                type: 'conversation',
+                source_path: segPath,
+                title: fullTitle,
+                timestamp,
+                entities: entityNames,
+                topics: topicNames,
+                summary: seg.text,
+              });
+            } catch {
+              // Segment embedding is best-effort
+            }
+          }
         }
+        logger.debug('Stored conversation segments', {
+          conversationId,
+          segments: segments.length,
+        });
       }
-      logger.debug('Stored conversation segments', {
-        conversationId,
-        segments: segments.length,
-      });
+    } catch (err) {
+      logger.warn('Segment storage failed', { error: String(err) });
     }
-  } catch (err) {
-    logger.warn('Segment storage failed', { error: String(err) });
   }
 
   logger.info('storeConversation:entityGraph:before', { heapMB: heapMB() });
@@ -392,9 +398,10 @@ export async function storeConversation(
   logger.info('storeConversation:embeddings:before', { heapMB: heapMB() });
   // ── Step 4: Embeddings (best-effort) ─────────────────────────────────
   // Skip parent-level ChromaDB indexing if segments were created (Step 2b).
+  // Also skip if heap is above 6GB to prevent OOM crash.
   const hasSegments = fullText.length > 250;
   try {
-    if (isChromaAvailable() && !hasSegments) {
+    if (isChromaAvailable() && !hasSegments && heapMB() < 6144) {
       await indexDocument(conversationId, fullText, {
         type: 'conversation',
         source_path: sourcePath,
