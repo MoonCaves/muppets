@@ -254,7 +254,7 @@ async function handleSearch(query: string, options: SearchOptions) {
     const limit = parseInt(options.limit) || 10;
     const root = getRoot();
 
-    await initializeEmbeddings();
+    await initializeEmbeddings(root);
 
     // Semantic-only fallback (opt-in for debugging or when sleep agent data isn't needed)
     if (options.semanticOnly) {
@@ -264,7 +264,7 @@ async function handleSearch(query: string, options: SearchOptions) {
       }
 
       const type = options.type as 'conversation' | 'idea' | 'file' | 'transcript' | 'note' | undefined;
-      let results = await semanticSearch(query, { limit: limit * 2, type });
+      let results = await semanticSearch(root, query, { limit: limit * 2, type });
 
       if (options.entity) {
         results = filterByEntity(results, options.entity, options.entityMatch || 'all');

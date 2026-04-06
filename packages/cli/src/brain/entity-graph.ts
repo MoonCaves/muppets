@@ -84,34 +84,40 @@ export interface EntityContext {
 // DATABASE MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-let db: Database.Database | null = null;
-let dbPath: string | null = null;
+const databases = new Map<string, Database.Database>();
 
 /**
- * Reset the entity graph DB singleton. Closes any open connection so the next
- * call to getEntityGraphDb() will open a fresh database at the new root.
- * Used by the benchmark harness to isolate conversations.
+ * Reset the entity graph DB connection(s). If root is given, closes only that
+ * root's connection. If no root, closes all (backward compat for eval/tests).
  */
-export function resetEntityGraphDb(): void {
-  if (db) {
-    try { db.close(); } catch { /* ignore */ }
+export function resetEntityGraphDb(root?: string): void {
+  if (root) {
+    const existing = databases.get(root);
+    if (existing) {
+      try { existing.close(); } catch { /* ignore */ }
+      databases.delete(root);
+    }
+  } else {
+    for (const [, conn] of databases) {
+      try { conn.close(); } catch { /* ignore */ }
+    }
+    databases.clear();
   }
-  db = null;
-  dbPath = null;
 }
 
 async function ensureDatabase(root: string): Promise<Database.Database> {
-  if (db && dbPath) return db;
+  const existing = databases.get(root);
+  if (existing) return existing;
 
   const dataDir = join(root, 'data');
   await mkdir(dataDir, { recursive: true });
 
-  dbPath = join(dataDir, 'entity-graph.db');
-  db = new Database(dbPath);
+  const newDbPath = join(dataDir, 'entity-graph.db');
+  const newDb = new Database(newDbPath);
 
-  db.pragma('journal_mode = WAL');
+  newDb.pragma('journal_mode = WAL');
 
-  db.exec(`
+  newDb.exec(`
     CREATE TABLE IF NOT EXISTS entities (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -155,10 +161,11 @@ async function ensureDatabase(root: string): Promise<Database.Database> {
     CREATE INDEX IF NOT EXISTS idx_relations_target ON entity_relations(target_id);
   `);
 
-  runEntityMigrations(db);
+  runEntityMigrations(newDb);
 
-  logger.info('Entity graph database initialized', { path: dbPath });
-  return db;
+  databases.set(root, newDb);
+  logger.info('Entity graph database initialized', { path: newDbPath });
+  return newDb;
 }
 
 function runEntityMigrations(database: Database.Database): void {

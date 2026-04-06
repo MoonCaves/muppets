@@ -13,19 +13,39 @@ import { createLogger } from '../logger.js';
 
 const logger = createLogger('messages');
 
-let db: Database.Database | null = null;
+const databases = new Map<string, Database.Database>();
+
+/**
+ * Reset the messages DB connection(s). If root is given, closes only that
+ * root's connection. If no root, closes all.
+ */
+export function resetMessagesDb(root?: string): void {
+  if (root) {
+    const existing = databases.get(root);
+    if (existing) {
+      try { existing.close(); } catch { /* ignore */ }
+      databases.delete(root);
+    }
+  } else {
+    for (const [, conn] of databases) {
+      try { conn.close(); } catch { /* ignore */ }
+    }
+    databases.clear();
+  }
+}
 
 function ensureDatabase(root: string): Database.Database {
-  if (db) return db;
+  const existing = databases.get(root);
+  if (existing) return existing;
 
   const dataDir = join(root, 'data');
   mkdirSync(dataDir, { recursive: true });
 
-  const dbPath = join(dataDir, 'messages.db');
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+  const newDbPath = join(dataDir, 'messages.db');
+  const newDb = new Database(newDbPath);
+  newDb.pragma('journal_mode = WAL');
 
-  db.exec(`
+  newDb.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       channel TEXT NOT NULL DEFAULT 'web',
@@ -52,13 +72,14 @@ function ensureDatabase(root: string): Database.Database {
   `);
 
   // Migration: add claude_session_id column if not present
-  const cols = db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
+  const cols = newDb.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
   if (!cols.some(c => c.name === 'claude_session_id')) {
-    db.exec(`ALTER TABLE sessions ADD COLUMN claude_session_id TEXT`);
+    newDb.exec(`ALTER TABLE sessions ADD COLUMN claude_session_id TEXT`);
   }
 
-  logger.info('Messages database initialized', { path: dbPath });
-  return db;
+  databases.set(root, newDb);
+  logger.info('Messages database initialized', { path: newDbPath });
+  return newDb;
 }
 
 export interface StoredMessage {

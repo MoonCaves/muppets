@@ -70,7 +70,7 @@ function createTestApp() {
   });
 
   // Brain API (authenticated)
-  app.use('/brain', authMiddleware, createBrainRouter());
+  app.use('/brain', authMiddleware, createBrainRouter('/tmp/test-root'));
 
   return app;
 }

@@ -12,34 +12,40 @@ import { createLogger } from '../../logger.js';
 
 const logger = createLogger('sleep-db');
 
-let db: Database.Database | null = null;
-let currentRoot: string | null = null;
+const databases = new Map<string, Database.Database>();
 
 /**
- * Reset the sleep DB singleton. Closes any open connection.
- * Used by the benchmark harness to isolate conversations.
+ * Reset the sleep DB connection(s). If root is given, closes only that
+ * root's connection. If no root, closes all (backward compat for eval/tests).
  */
-export function resetSleepDb(): void {
-  if (db) {
-    try { db.close(); } catch { /* ignore */ }
+export function resetSleepDb(root?: string): void {
+  if (root) {
+    const existing = databases.get(root);
+    if (existing) {
+      try { existing.close(); } catch { /* ignore */ }
+      databases.delete(root);
+    }
+  } else {
+    for (const [, conn] of databases) {
+      try { conn.close(); } catch { /* ignore */ }
+    }
+    databases.clear();
   }
-  db = null;
-  currentRoot = null;
 }
 
 export function getSleepDb(root: string): Database.Database {
-  if (db && currentRoot === root) return db;
+  const existing = databases.get(root);
+  if (existing) return existing;
 
   const dataDir = join(root, 'data');
   mkdirSync(dataDir, { recursive: true });
 
   const dbPath = join(dataDir, 'sleep.db');
-  db = new Database(dbPath);
-  currentRoot = root;
+  const newDb = new Database(dbPath);
 
-  db.pragma('journal_mode = WAL');
+  newDb.pragma('journal_mode = WAL');
 
-  db.exec(`
+  newDb.exec(`
     CREATE TABLE IF NOT EXISTS sleep_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       started_at TEXT NOT NULL,
@@ -106,10 +112,11 @@ export function getSleepDb(root: string): Database.Database {
   `);
 
   // Run migrations for CHECK constraint expansion
-  runSleepDbMigrations(db);
+  runSleepDbMigrations(newDb);
 
+  databases.set(root, newDb);
   logger.info('Sleep database initialized', { path: dbPath });
-  return db;
+  return newDb;
 }
 
 /**

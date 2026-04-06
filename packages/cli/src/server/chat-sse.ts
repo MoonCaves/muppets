@@ -8,7 +8,7 @@
 
 import { spawn } from 'node:child_process';
 import type { Request, Response } from 'express';
-import { getRoot, getClaudeModel } from '../config.js';
+import { getClaudeModel } from '../config.js';
 import { createLogger } from '../logger.js';
 import { buildChannelSystemPrompt } from './channels/system-prompt.js';
 import { pushUserMessage, pushAssistantMessage, buildPromptWithHistory } from './channels/conversation-history.js';
@@ -106,7 +106,7 @@ function buildPromptFromSession(cwd: string, sessionId: string, currentMessage: 
 /**
  * SSE streaming chat handler.
  */
-export async function chatSseHandler(req: Request, res: Response) {
+export async function chatSseHandler(req: Request, res: Response, root: string) {
   const { prompt, sessionId } = req.body ?? {};
 
   if (!prompt || typeof prompt !== 'string') {
@@ -132,12 +132,7 @@ export async function chatSseHandler(req: Request, res: Response) {
     return;
   }
 
-  let cwd: string;
-  try {
-    cwd = process.env.KYBERBOT_ROOT || getRoot();
-  } catch {
-    cwd = process.cwd();
-  }
+  const cwd = root;
 
   const model = getClaudeModel() || 'opus';
 

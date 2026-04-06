@@ -137,7 +137,7 @@ export function createRunCommand(): Command {
             if (chromaStatus === 'running' || chromaStatus === 'disabled') {
               // Container is up (or Docker unavailable) — now try embeddings
               const { initializeEmbeddings } = await import('../brain/embeddings.js');
-              const embeddingsOk = await initializeEmbeddings();
+              const embeddingsOk = await initializeEmbeddings(root);
               return {
                 stop: handle.stop,
                 status: () => embeddingsOk ? 'running' as const : handle.status() as 'running' | 'disabled' | 'error',
@@ -170,7 +170,7 @@ export function createRunCommand(): Command {
           enabled: options.heartbeat,
           start: async () => {
             const { startHeartbeat } = await import('../services/heartbeat.js');
-            return startHeartbeat();
+            return startHeartbeat(root);
           },
         });
 

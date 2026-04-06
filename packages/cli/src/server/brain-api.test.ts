@@ -46,7 +46,7 @@ const { createBrainRouter } = await import('./brain-api.js');
 function createTestApp() {
   const app = express();
   app.use(express.json());
-  app.use('/', createBrainRouter());
+  app.use('/', createBrainRouter('/tmp/test-brain-root'));
   return app;
 }
 

@@ -322,7 +322,7 @@ export async function hybridSearch(
   let semanticResults: SearchResult[] = [];
   for (const q of queries) {
     try {
-      const results = await semanticSearch(q, { limit: limit * 3, type });
+      const results = await semanticSearch(root, q, { limit: limit * 3, type });
       semanticResults.push(...results);
     } catch (err) {
       if (q === query) {

@@ -39,7 +39,9 @@ vi.mock('../config.js', () => ({
   },
   getRoot: () => mockGetRoot(),
   getIdentity: () => mockGetIdentity(),
+  getIdentityForRoot: () => mockGetIdentity(),
   getAgentName: () => mockGetAgentName(),
+  getAgentNameForRoot: () => mockGetAgentName(),
   resetConfig: () => mockResetConfig(),
 }));
 
@@ -71,7 +73,7 @@ const { createWebApiRouter } = await import('./web-api.js');
 function createTestApp() {
   const app = express();
   app.use(express.json());
-  app.use('/', createWebApiRouter());
+  app.use('/', createWebApiRouter('/tmp/test-root'));
   // Debug error handler
   app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     res.status(500).json({ error: err.message });

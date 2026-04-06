@@ -203,4 +203,43 @@ export const paths = {
 export function resetConfig(): void {
   _root = null;
   _identity = null;
+  identityCache.clear();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PER-ROOT IDENTITY (for multi-agent runtime)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const identityCache = new Map<string, IdentityConfig>();
+
+/**
+ * Load identity.yaml for a specific root, with caching.
+ * Unlike getIdentity(), this does not depend on the global _root.
+ */
+export function getIdentityForRoot(root: string): IdentityConfig {
+  const cached = identityCache.get(root);
+  if (cached) return cached;
+
+  const identityPath = join(root, 'identity.yaml');
+  if (!existsSync(identityPath)) {
+    throw new Error(`identity.yaml not found at ${identityPath}`);
+  }
+
+  const raw = readFileSync(identityPath, 'utf-8');
+  const identity = yaml.load(raw) as IdentityConfig;
+  identityCache.set(root, identity);
+  return identity;
+}
+
+export function getAgentNameForRoot(root: string): string {
+  return getIdentityForRoot(root).agent_name || 'KyberBot';
+}
+
+export function getServerPortForRoot(root: string): number {
+  return getIdentityForRoot(root).server?.port || 3456;
+}
+
+export function clearIdentityCache(root?: string): void {
+  if (root) identityCache.delete(root);
+  else identityCache.clear();
 }

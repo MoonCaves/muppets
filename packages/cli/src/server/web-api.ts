@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { readFileSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 import * as yaml from 'js-yaml';
-import { paths, getIdentity, getAgentName, getRoot, resetConfig } from '../config.js';
+import { getIdentityForRoot, getAgentNameForRoot, resetConfig } from '../config.js';
 import { queryTimeline } from '../brain/timeline.js';
 import { listSessions, getSessionMessages, createSession, saveMessage } from '../brain/messages.js';
 import { createLogger } from '../logger.js';
@@ -23,11 +23,12 @@ function isValidBlock(block: string): block is MemoryBlock {
   return VALID_BLOCKS.includes(block as MemoryBlock);
 }
 
-function getBlockPath(block: MemoryBlock): string {
-  return paths[block];
-}
-
-export function createWebApiRouter(): Router {
+export function createWebApiRouter(root: string): Router {
+  const blockPaths: Record<string, string> = {
+    soul: join(root, 'SOUL.md'),
+    user: join(root, 'USER.md'),
+    heartbeat: join(root, 'HEARTBEAT.md'),
+  };
   const router = Router();
 
   // GET /memory/:block — Read a memory block (SOUL.md, USER.md, HEARTBEAT.md)
@@ -40,7 +41,7 @@ export function createWebApiRouter(): Router {
     }
 
     try {
-      const filePath = getBlockPath(block);
+      const filePath = blockPaths[block];
       const content = readFileSync(filePath, 'utf-8');
       const stat = statSync(filePath);
       res.json({ content, lastModified: stat.mtime.toISOString() });
@@ -71,7 +72,7 @@ export function createWebApiRouter(): Router {
     }
 
     try {
-      const filePath = getBlockPath(block);
+      const filePath = blockPaths[block];
       writeFileSync(filePath, content, 'utf-8');
       res.json({ ok: true });
     } catch (err) {
@@ -84,7 +85,7 @@ export function createWebApiRouter(): Router {
   router.get('/identity', (_req, res) => {
     try {
       resetConfig();
-      const identity = getIdentity();
+      const identity = getIdentityForRoot(root);
       res.json(identity);
     } catch (err) {
       logger.error('Failed to read identity', { error: String(err) });
@@ -107,7 +108,6 @@ export function createWebApiRouter(): Router {
     }
 
     try {
-      const root = getRoot();
       const identityPath = join(root, 'identity.yaml');
       const current = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, unknown>;
 
@@ -128,7 +128,6 @@ export function createWebApiRouter(): Router {
   // GET /sessions — List recent chat sessions
   router.get('/sessions', (_req, res) => {
     try {
-      const root = getRoot();
       const sessions = listSessions(root, 30);
       res.json({ sessions });
     } catch (err) {
@@ -140,7 +139,6 @@ export function createWebApiRouter(): Router {
   // POST /sessions — Create a new session
   router.post('/sessions', (req, res) => {
     try {
-      const root = getRoot();
       const sessionId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       createSession(root, sessionId, 'web');
       res.json({ sessionId });
@@ -153,7 +151,6 @@ export function createWebApiRouter(): Router {
   // GET /sessions/:id/messages — Get messages for a session
   router.get('/sessions/:id/messages', (req, res) => {
     try {
-      const root = getRoot();
       const messages = getSessionMessages(root, req.params.id);
       res.json({
         messages: messages.map(m => ({
@@ -181,7 +178,6 @@ export function createWebApiRouter(): Router {
       return;
     }
     try {
-      const root = getRoot();
       const msgId = saveMessage(root, req.params.id, role, content, {
         toolCalls,
         memoryUpdates,
@@ -198,7 +194,7 @@ export function createWebApiRouter(): Router {
   // GET /status — Aggregate service status
   router.get('/status', (_req, res) => {
     try {
-      const agent = getAgentName();
+      const agent = getAgentNameForRoot(root);
       res.json({
         agent,
         uptime: process.uptime(),
