@@ -61,6 +61,21 @@ export async function startSleepAgent(
   const runCycle = async (): Promise<void> => {
     if (!running) return;
 
+    // Wait for any active storeConversation to finish before starting cycle
+    // Concurrent access between sleep agent and storeConversation causes OOM
+    try {
+      const { isStoreActive } = await import('../store-conversation.js');
+      if (isStoreActive()) {
+        logger.info('Waiting for active storeConversation to finish before sleep cycle');
+        // Poll every 2 seconds until store is done (max 60 seconds)
+        for (let i = 0; i < 30 && isStoreActive(); i++) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    } catch {
+      // import might fail in some contexts — proceed anyway
+    }
+
     const db = getSleepDb(root);
     const startTime = Date.now();
 

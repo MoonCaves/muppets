@@ -34,9 +34,18 @@ const logger = createLogger('brain');
  * access = 8GB heap spikes.
  */
 let storeQueue: Promise<void> = Promise.resolve();
+let storeActive = false;
+
+/** Returns true if a storeConversation call is currently in progress */
+export function isStoreActive(): boolean {
+  return storeActive;
+}
 
 function enqueue(fn: () => Promise<void>): Promise<void> {
-  storeQueue = storeQueue.then(fn, fn); // run fn after previous completes (or fails)
+  storeQueue = storeQueue.then(
+    async () => { storeActive = true; try { await fn(); } finally { storeActive = false; } },
+    async () => { storeActive = true; try { await fn(); } finally { storeActive = false; } }
+  );
   return storeQueue;
 }
 
