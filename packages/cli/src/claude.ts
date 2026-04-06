@@ -193,6 +193,9 @@ export class ClaudeClient {
       proc.stderr.on('data', (data: Buffer) => { errChunks.push(data); });
 
       proc.on('close', (code) => {
+        const chunksBytes = chunks.reduce((sum, c) => sum + c.length, 0);
+        const errBytes = errChunks.reduce((sum, c) => sum + c.length, 0);
+        logger.info('subprocess:close', { code, stdoutBytes: chunksBytes, stderrBytes: errBytes, totalStdoutRead: stdoutBytes, destroyed: stdoutDestroyed, heapMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) });
         const stdout = Buffer.concat(chunks).toString().trim();
         const stderr = Buffer.concat(errChunks).toString();
         // Clear references immediately to let GC reclaim buffers

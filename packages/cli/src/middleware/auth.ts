@@ -47,7 +47,13 @@ export function authMiddleware(
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
-    logger.warn('Missing Authorization header', { path: req.path, ip: req.ip });
+    // Only log at debug for localhost (web UI polling without token)
+    const isLocal = req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1';
+    if (isLocal) {
+      logger.debug('Missing auth from localhost', { path: req.path });
+    } else {
+      logger.warn('Missing Authorization header', { path: req.path, ip: req.ip });
+    }
     res.status(401).json({
       error: 'Unauthorized',
       message: 'Missing Authorization header',
@@ -67,7 +73,13 @@ export function authMiddleware(
   }
 
   if (!validateToken(token)) {
-    logger.warn('Invalid API token', { path: req.path, ip: req.ip });
+    // Only log at debug for localhost (desktop/web UI with stale token)
+    const isLocal = req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1';
+    if (isLocal) {
+      logger.debug('Invalid token from localhost', { path: req.path });
+    } else {
+      logger.warn('Invalid API token', { path: req.path, ip: req.ip });
+    }
     res.status(401).json({
       error: 'Unauthorized',
       message: 'Invalid API token',
