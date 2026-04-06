@@ -34,7 +34,11 @@
         "GHSA-c2c7-rcm5-vvqj",
         "GHSA-37ch-88jc-xwx2"
       ]
-    }
+    },
+    "onlyBuiltDependencies": [
+      "electron",
+      "better-sqlite3"
+    ]
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

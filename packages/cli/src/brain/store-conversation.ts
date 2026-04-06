@@ -25,6 +25,31 @@ import { extractFactsRealtime } from './fact-extractor.js';
 const logger = createLogger('brain');
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SERIALIZATION QUEUE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Serialize storeConversation calls to prevent concurrent SQLite/subprocess
+ * operations from causing OOM crashes. better-sqlite3 + concurrent async
+ * access = 8GB heap spikes.
+ */
+let storeQueue: Promise<void> = Promise.resolve();
+let storeActive = false;
+
+/** Returns true if a storeConversation call is currently in progress */
+export function isStoreActive(): boolean {
+  return storeActive;
+}
+
+function enqueue(fn: () => Promise<void>): Promise<void> {
+  storeQueue = storeQueue.then(
+    async () => { storeActive = true; try { await fn(); } finally { storeActive = false; } },
+    async () => { storeActive = true; try { await fn(); } finally { storeActive = false; } }
+  );
+  return storeQueue;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SEGMENT SPLITTING
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -60,8 +85,17 @@ function segmentText(text: string, segmentSize: number = 250, overlap: number = 
 
     segments.push({ text: text.slice(start, end).trim(), index });
     index++;
-    start = end - overlap;
+    // Ensure forward progress — never go backwards
+    const nextStart = end - overlap;
+    if (nextStart <= start) {
+      // Overlap would cause infinite loop — advance past end instead
+      start = end;
+    } else {
+      start = nextStart;
+    }
     if (start >= text.length) break;
+    // Safety: cap at 100 segments max
+    if (index > 100) break;
   }
 
   return segments;
@@ -164,10 +198,18 @@ function channelToSourceType(channel: string): string {
  * Store a conversation across all memory subsystems.
  * Call fire-and-forget — never throws, logs all errors internally.
  */
-export async function storeConversation(
+export function storeConversation(
   root: string,
   input: ConversationInput,
-  options: { entityStoplist?: string[] } = {}
+  options: { entityStoplist?: string[]; skipEmbeddings?: boolean } = {}
+): Promise<void> {
+  return enqueue(() => storeConversationImpl(root, input, options));
+}
+
+async function storeConversationImpl(
+  root: string,
+  input: ConversationInput,
+  options: { entityStoplist?: string[]; skipEmbeddings?: boolean } = {}
 ): Promise<void> {
   const conversationId = randomUUID();
   const timestamp = input.timestamp || new Date().toISOString();
@@ -176,11 +218,13 @@ export async function storeConversation(
   const sourceType = channelToSourceType(input.channel);
   const sourceConfidence = SOURCE_CONFIDENCE[sourceType] ?? 0.85;
 
-  logger.debug('Storing conversation', {
+  const heapMB = () => Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+  logger.info('storeConversation:start', {
     channel: input.channel,
     conversationId,
     promptLength: input.prompt.length,
     responseLength: input.response.length,
+    heapMB: heapMB(),
   });
 
   // ── Step 1: Extract entities and relationships via Haiku ──────────────
@@ -194,13 +238,11 @@ export async function storeConversation(
   }> = [];
 
   try {
+    logger.info('storeConversation:extractRelationships:before', { heapMB: heapMB() });
     const extraction = await extractRelationships(fullText);
+    logger.info('storeConversation:extractRelationships:after', { heapMB: heapMB() });
     entities = extraction.entities;
     relationships = extraction.relationships;
-    logger.debug('Extracted from conversation', {
-      entities: entities.length,
-      relationships: relationships.length,
-    });
   } catch (err) {
     logger.warn('Entity extraction failed', { error: String(err) });
   }
@@ -229,6 +271,7 @@ export async function storeConversation(
     .filter((e) => e.type === 'topic')
     .map((e) => e.name);
 
+  logger.info('storeConversation:timeline:before', { heapMB: heapMB() });
   // ── Step 2: Timeline ─────────────────────────────────────────────────
   const title = input.prompt.length > 100
     ? input.prompt.slice(0, 97) + '...'
@@ -273,50 +316,55 @@ export async function storeConversation(
     logger.warn('Timeline storage failed', { error: String(err) });
   }
 
-  // ── Step 2b: Segment-level indexing for fine-grained retrieval ────
-  try {
-    const segments = segmentText(fullText, 250, 50);
-    if (segments.length > 1) { // Only segment if text is long enough to split
-      for (const seg of segments) {
-        const segPath = `${sourcePath}/seg_${seg.index}`;
-        const segId = `${conversationId}_seg_${seg.index}`;
+  logger.info('storeConversation:segments:before', { heapMB: heapMB() });
+  // ── Step 2b: Segment-level indexing for fine-grained retrieval ────────
+  // Serialization queue prevents concurrent OOM — safe to index here.
+  {
+    try {
+      const segments = segmentText(fullText, 250, 50);
+      if (segments.length > 1) {
+        for (const seg of segments) {
+          const segPath = `${sourcePath}/seg_${seg.index}`;
+          const segId = `${conversationId}_seg_${seg.index}`;
 
-        // Store segment in timeline (for FTS)
-        try {
-          await addConversationToTimeline(
-            root, segId, segPath, timestamp, undefined,
-            fullTitle, seg.text, entityNames, topicNames
-          );
-        } catch {
-          // Segment storage is best-effort
-        }
-
-        // Store segment in ChromaDB (for semantic search)
-        try {
-          if (isChromaAvailable()) {
-            await indexDocument(segId, seg.text, {
-              type: 'conversation',
-              source_path: segPath,
-              title: fullTitle,
-              timestamp,
-              entities: entityNames,
-              topics: topicNames,
-              summary: seg.text,
-            });
+          // Store segment in timeline (for FTS)
+          try {
+            await addConversationToTimeline(
+              root, segId, segPath, timestamp, undefined,
+              fullTitle, seg.text, entityNames, topicNames
+            );
+          } catch {
+            // Segment storage is best-effort
           }
-        } catch {
-          // Segment embedding is best-effort
+
+          // Store segment in ChromaDB (for semantic search)
+          if (isChromaAvailable()) {
+            try {
+              await indexDocument(segId, seg.text, {
+                type: 'conversation',
+                source_path: segPath,
+                title: fullTitle,
+                timestamp,
+                entities: entityNames,
+                topics: topicNames,
+                summary: seg.text,
+              });
+            } catch {
+              // Segment embedding is best-effort
+            }
+          }
         }
+        logger.debug('Stored conversation segments', {
+          conversationId,
+          segments: segments.length,
+        });
       }
-      logger.debug('Stored conversation segments', {
-        conversationId,
-        segments: segments.length,
-      });
+    } catch (err) {
+      logger.warn('Segment storage failed', { error: String(err) });
     }
-  } catch (err) {
-    logger.warn('Segment storage failed', { error: String(err) });
   }
 
+  logger.info('storeConversation:entityGraph:before', { heapMB: heapMB() });
   // ── Step 3: Entity Graph ─────────────────────────────────────────────
   try {
     // Create entities and add mentions
@@ -376,6 +424,7 @@ export async function storeConversation(
     logger.warn('Entity graph storage failed', { error: String(err) });
   }
 
+  logger.info('storeConversation:factExtraction:before', { heapMB: heapMB() });
   // ── Step 3b: Real-time fact extraction (best-effort) ─────────────────
   try {
     await extractFactsRealtime(
@@ -385,8 +434,9 @@ export async function storeConversation(
     // Fact extraction is best-effort — never blocks conversation storage
   }
 
+  logger.info('storeConversation:embeddings:before', { heapMB: heapMB() });
   // ── Step 4: Embeddings (best-effort) ─────────────────────────────────
-  // Skip parent-level ChromaDB indexing if segments were created (Step 2b).
+  // Skip parent-level if segments were created (they're already indexed above).
   const hasSegments = fullText.length > 250;
   try {
     if (isChromaAvailable() && !hasSegments) {

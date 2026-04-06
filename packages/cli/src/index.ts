@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --max-old-space-size=8192
+#!/usr/bin/env -S node --max-old-space-size=16384
 
 /**
  * KyberBot CLI
