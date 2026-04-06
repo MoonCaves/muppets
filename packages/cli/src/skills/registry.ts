@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { paths, getAgentName, getHeartbeatInterval, getKybernesisApiKey } from '../config.js';
+import { paths, getAgentName, getHeartbeatInterval, getKybernesisApiKey, getAgentNameForRoot, getIdentityForRoot } from '../config.js';
 import { loadInstalledSkills } from './loader.js';
 import { InstalledSkill } from './types.js';
 import { loadInstalledAgents } from '../agents/loader.js';
@@ -35,8 +35,9 @@ function resolveTemplatePath(): string {
 /**
  * Rebuild the CLAUDE.md file with current skill and agent information.
  * Always starts from the source template to ensure markers are present.
+ * If root is provided, uses that agent's directory (multi-agent safe).
  */
-export function rebuildClaudeMd(): void {
+export function rebuildClaudeMd(root?: string): void {
   const templatePath = resolveTemplatePath();
 
   if (!existsSync(templatePath)) {
@@ -49,7 +50,7 @@ export function rebuildClaudeMd(): void {
   // Replace agent name placeholder
   let agentName: string;
   try {
-    agentName = getAgentName();
+    agentName = root ? getAgentNameForRoot(root) : getAgentName();
   } catch {
     agentName = 'KyberBot';
   }
@@ -57,7 +58,9 @@ export function rebuildClaudeMd(): void {
 
   // Replace heartbeat interval
   try {
-    const intervalMs = getHeartbeatInterval();
+    const intervalMs = root
+      ? parseDurationStr(getIdentityForRoot(root).heartbeat_interval || '30m')
+      : getHeartbeatInterval();
     const intervalMin = intervalMs / 1000 / 60;
     const intervalStr = intervalMin >= 60 ? `${intervalMin / 60} hour(s)` : `${intervalMin} minutes`;
     content = content.replace(/\{\{HEARTBEAT_INTERVAL\}\}/g, intervalStr);
@@ -78,7 +81,7 @@ export function rebuildClaudeMd(): void {
   }
 
   // Insert skill list
-  const skills = loadInstalledSkills();
+  const skills = loadInstalledSkills(root);
   const skillSection = buildSkillSection(skills);
   content = content.replace(
     /<!-- Auto-populated by skill registry -->/,
@@ -86,15 +89,28 @@ export function rebuildClaudeMd(): void {
   );
 
   // Insert agent list
-  const agents = loadInstalledAgents();
+  const agents = loadInstalledAgents(root);
   const agentSection = buildAgentSection(agents);
   content = content.replace(
     /<!-- Auto-populated by agent registry -->/,
     agentSection || '*No agents installed yet. Create one with `kyberbot agent create <name>`.*'
   );
 
-  writeFileSync(paths.claudeMd, content);
+  const claudeMdPath = root ? join(root, '.claude', 'CLAUDE.md') : paths.claudeMd;
+  writeFileSync(claudeMdPath, content);
   logger.info(`Rebuilt CLAUDE.md with ${skills.length} skills and ${agents.length} agents`);
+}
+
+function parseDurationStr(interval: string): number {
+  const match = interval.match(/^(\d+)(m|h|d)$/);
+  if (!match) return 30 * 60 * 1000;
+  const value = parseInt(match[1]);
+  switch (match[2]) {
+    case 'm': return value * 60 * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    case 'd': return value * 24 * 60 * 60 * 1000;
+    default: return 30 * 60 * 1000;
+  }
 }
 
 function buildSkillSection(skills: InstalledSkill[]): string {
@@ -111,8 +127,8 @@ function buildSkillSection(skills: InstalledSkill[]): string {
 /**
  * Remove a skill directory and rebuild CLAUDE.md
  */
-export function removeSkill(name: string): boolean {
-  const skillDir = join(paths.skills, name);
+export function removeSkill(name: string, root?: string): boolean {
+  const skillDir = join(root ? join(root, 'skills') : paths.skills, name);
 
   if (!existsSync(skillDir)) {
     return false;
@@ -121,7 +137,7 @@ export function removeSkill(name: string): boolean {
   // Remove directory recursively
   rmSync(skillDir, { recursive: true, force: true });
 
-  rebuildClaudeMd();
+  rebuildClaudeMd(root);
   logger.info(`Removed skill: ${name}`);
   return true;
 }

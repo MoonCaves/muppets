@@ -56,34 +56,40 @@ export interface TimelineStats {
 // DATABASE MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-let db: Database.Database | null = null;
-let dbPath: string | null = null;
+const databases = new Map<string, Database.Database>();
 
 /**
- * Reset the timeline DB singleton. Closes any open connection so the next
- * call to getTimelineDb() will open a fresh database at the new root.
- * Used by the benchmark harness to isolate conversations.
+ * Reset the timeline DB connection(s). If root is given, closes only that
+ * root's connection. If no root, closes all (backward compat for eval/tests).
  */
-export function resetTimelineDb(): void {
-  if (db) {
-    try { db.close(); } catch { /* ignore */ }
+export function resetTimelineDb(root?: string): void {
+  if (root) {
+    const existing = databases.get(root);
+    if (existing) {
+      try { existing.close(); } catch { /* ignore */ }
+      databases.delete(root);
+    }
+  } else {
+    for (const [, conn] of databases) {
+      try { conn.close(); } catch { /* ignore */ }
+    }
+    databases.clear();
   }
-  db = null;
-  dbPath = null;
 }
 
 async function ensureDatabase(root: string): Promise<Database.Database> {
-  if (db && dbPath) return db;
+  const existing = databases.get(root);
+  if (existing) return existing;
 
   const dataDir = join(root, 'data');
   await mkdir(dataDir, { recursive: true });
 
-  dbPath = join(dataDir, 'timeline.db');
-  db = new Database(dbPath);
+  const newDbPath = join(dataDir, 'timeline.db');
+  const newDb = new Database(newDbPath);
 
-  db.pragma('journal_mode = WAL');
+  newDb.pragma('journal_mode = WAL');
 
-  db.exec(`
+  newDb.exec(`
     CREATE TABLE IF NOT EXISTS timeline_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       type TEXT NOT NULL CHECK(type IN ('conversation', 'idea', 'file', 'transcript', 'note', 'intake')),
@@ -127,10 +133,11 @@ async function ensureDatabase(root: string): Promise<Database.Database> {
     END;
   `);
 
-  runMigrations(db);
+  runMigrations(newDb);
 
-  logger.info('Timeline database initialized', { path: dbPath });
-  return db;
+  databases.set(root, newDb);
+  logger.info('Timeline database initialized', { path: newDbPath });
+  return newDb;
 }
 
 function runMigrations(database: Database.Database): void {

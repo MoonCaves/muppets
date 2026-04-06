@@ -21,8 +21,10 @@ export interface ScaffoldOptions {
 /**
  * Create a new skill from template
  */
-export function scaffoldSkill(options: ScaffoldOptions): string {
-  const skillDir = join(paths.skills, options.name);
+export function scaffoldSkill(options: ScaffoldOptions, root?: string): string {
+  const skillsBase = root ? join(root, 'skills') : paths.skills;
+  const rootBase = root || paths.root;
+  const skillDir = join(skillsBase, options.name);
 
   if (existsSync(skillDir)) {
     throw new Error(`Skill already exists: ${options.name}`);
@@ -31,7 +33,7 @@ export function scaffoldSkill(options: ScaffoldOptions): string {
   mkdirSync(skillDir, { recursive: true });
 
   // Read template
-  const templatePath = join(paths.root, '.claude', 'skills', 'templates', 'skill-template.md');
+  const templatePath = join(rootBase, '.claude', 'skills', 'templates', 'skill-template.md');
   let template: string;
 
   if (existsSync(templatePath)) {

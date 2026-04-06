@@ -18,7 +18,7 @@ import { randomBytes } from 'crypto';
 import yaml from 'js-yaml';
 import { createLogger } from '../../logger.js';
 import { getClaudeClient } from '../../claude.js';
-import { getAgentName, getRoot } from '../../config.js';
+import { getAgentNameForRoot } from '../../config.js';
 import { Channel, ChannelMessage } from './types.js';
 import { storeConversation } from '../../brain/store-conversation.js';
 import { buildChannelSystemPrompt } from './system-prompt.js';
@@ -39,7 +39,7 @@ export class TelegramChannel implements Channel {
   private verificationCode: string | null = null;
   private ownerChatId: number | null;
 
-  constructor(private config: TelegramConfig) {
+  constructor(private config: TelegramConfig, private root: string) {
     this.ownerChatId = config.owner_chat_id ?? null;
   }
 
@@ -76,7 +76,7 @@ export class TelegramChannel implements Channel {
             this.saveOwnerChatId(chatId);
             logger.info(`Owner verified: chat_id=${chatId}`);
 
-            const agentName = getAgentName();
+            const agentName = getAgentNameForRoot(this.root);
             const greeting = this.loadGreeting(agentName);
             await ctx.reply(`Connected! You are now the verified owner.\n\n${greeting}`);
             return;
@@ -99,7 +99,7 @@ export class TelegramChannel implements Channel {
       // ── Handle /start after verification ───────────────────────────────
       if (text === '/start') {
         clearHistory(`telegram:${chatId}`);
-        const agentName = getAgentName();
+        const agentName = getAgentNameForRoot(this.root);
         const greeting = this.loadGreeting(agentName);
         await ctx.reply(greeting);
         return;
@@ -151,7 +151,7 @@ export class TelegramChannel implements Channel {
 
           // Fire-and-forget: store conversation in memory
           // skipEmbeddings: true — sleep agent handles ChromaDB indexing to avoid OOM
-          storeConversation(getRoot(), {
+          storeConversation(this.root, {
             prompt: text,
             response: reply,
             channel: 'telegram',
@@ -199,8 +199,7 @@ export class TelegramChannel implements Channel {
 
   private saveOwnerChatId(chatId: number): void {
     try {
-      const root = getRoot();
-      const identityPath = join(root, 'identity.yaml');
+      const identityPath = join(this.root, 'identity.yaml');
       const raw = readFileSync(identityPath, 'utf-8');
       const identity = yaml.load(raw) as Record<string, any>;
 
@@ -217,8 +216,7 @@ export class TelegramChannel implements Channel {
 
   private loadGreeting(agentName: string): string {
     try {
-      const root = getRoot();
-      const userPath = join(root, 'USER.md');
+      const userPath = join(this.root, 'USER.md');
       const userMd = existsSync(userPath) ? readFileSync(userPath, 'utf-8') : '';
       const isFirstRun = userMd.includes('<!-- I will fill this in') || userMd.length < 300;
 

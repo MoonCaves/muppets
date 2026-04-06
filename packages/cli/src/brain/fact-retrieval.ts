@@ -184,7 +184,7 @@ async function searchFactsDirect(
   // ── ChromaDB semantic search ───────────────────────────────────────────────
   try {
     const { semanticSearch } = await import('./embeddings.js');
-    const semanticResults = await semanticSearch(query, { limit: limit * 2, type: 'note' });
+    const semanticResults = await semanticSearch(root, query, { limit: limit * 2, type: 'note' });
 
     for (const sr of semanticResults) {
       // Only include results whose source_path starts with 'fact://'

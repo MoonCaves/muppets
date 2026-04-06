@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, statSync, existsSync, readdirSync } from '
 import { join } from 'path';
 import { spawn } from 'node:child_process';
 import yaml from 'js-yaml';
-import { paths, getRoot, getClaudeModel } from '../config.js';
+import { getClaudeModel } from '../config.js';
 import { loadInstalledSkills, getSkill } from '../skills/loader.js';
 import { scaffoldSkill } from '../skills/scaffolder.js';
 import { removeSkill, rebuildClaudeMd } from '../skills/registry.js';
@@ -33,7 +33,7 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
   };
 }
 
-export function createManagementRouter(channels: Channel[]): Router {
+export function createManagementRouter(channels: Channel[], root: string): Router {
   const router = Router();
 
   // ─────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /skills — List all installed skills
   router.get('/skills', (_req, res) => {
     try {
-      const skills = loadInstalledSkills();
+      const skills = loadInstalledSkills(root);
       res.json({ skills });
     } catch (err) {
       logger.error('Failed to list skills', { error: String(err) });
@@ -54,7 +54,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /skills/:name — Get a specific skill
   router.get('/skills/:name', (req, res) => {
     try {
-      const skill = getSkill(req.params.name);
+      const skill = getSkill(req.params.name, root);
       if (!skill) {
         res.status(404).json({ error: `Skill not found: ${req.params.name}` });
         return;
@@ -69,7 +69,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /skills/:name/content — Read SKILL.md content
   router.get('/skills/:name/content', (req, res) => {
     try {
-      const skill = getSkill(req.params.name);
+      const skill = getSkill(req.params.name, root);
       if (!skill) {
         res.status(404).json({ error: `Skill not found: ${req.params.name}` });
         return;
@@ -92,14 +92,14 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      const skill = getSkill(req.params.name);
+      const skill = getSkill(req.params.name, root);
       if (!skill) {
         res.status(404).json({ error: `Skill not found: ${req.params.name}` });
         return;
       }
       const filePath = join(skill.path, 'SKILL.md');
       writeFileSync(filePath, content, 'utf-8');
-      rebuildClaudeMd();
+      rebuildClaudeMd(root);
       res.json({ ok: true });
     } catch (err) {
       logger.error('Failed to write skill content', { error: String(err) });
@@ -123,9 +123,9 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      const path = scaffoldSkill({ name, description, requiresEnv, hasSetup });
-      rebuildClaudeMd();
-      const skill = getSkill(name);
+      const path = scaffoldSkill({ name, description, requiresEnv, hasSetup }, root);
+      rebuildClaudeMd(root);
+      const skill = getSkill(name, root);
       res.json({ ok: true, path, skill });
     } catch (err: unknown) {
       const message = (err as Error).message || '';
@@ -141,7 +141,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // DELETE /skills/:name — Remove a skill
   router.delete('/skills/:name', (req, res) => {
     try {
-      const removed = removeSkill(req.params.name);
+      const removed = removeSkill(req.params.name, root);
       if (!removed) {
         res.status(404).json({ error: `Skill not found: ${req.params.name}` });
         return;
@@ -156,7 +156,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // POST /skills/rebuild — Rebuild CLAUDE.md
   router.post('/skills/rebuild', (_req, res) => {
     try {
-      rebuildClaudeMd();
+      rebuildClaudeMd(root);
       res.json({ ok: true });
     } catch (err) {
       logger.error('Failed to rebuild CLAUDE.md', { error: String(err) });
@@ -171,7 +171,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /agents — List all installed agents
   router.get('/agents', (_req, res) => {
     try {
-      const agents = loadInstalledAgents();
+      const agents = loadInstalledAgents(root);
       res.json({ agents });
     } catch (err) {
       logger.error('Failed to list agents', { error: String(err) });
@@ -182,7 +182,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /agents/:name — Get a specific agent
   router.get('/agents/:name', (req, res) => {
     try {
-      const agent = getAgent(req.params.name);
+      const agent = getAgent(req.params.name, root);
       if (!agent) {
         res.status(404).json({ error: `Agent not found: ${req.params.name}` });
         return;
@@ -197,7 +197,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /agents/:name/content — Read agent .md file content
   router.get('/agents/:name/content', (req, res) => {
     try {
-      const agent = getAgent(req.params.name);
+      const agent = getAgent(req.params.name, root);
       if (!agent) {
         res.status(404).json({ error: `Agent not found: ${req.params.name}` });
         return;
@@ -219,13 +219,13 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      const agent = getAgent(req.params.name);
+      const agent = getAgent(req.params.name, root);
       if (!agent) {
         res.status(404).json({ error: `Agent not found: ${req.params.name}` });
         return;
       }
       writeFileSync(agent.path, content, 'utf-8');
-      rebuildClaudeMd();
+      rebuildClaudeMd(root);
       res.json({ ok: true });
     } catch (err) {
       logger.error('Failed to write agent content', { error: String(err) });
@@ -253,9 +253,9 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      const path = scaffoldAgent({ name, description, role, model, maxTurns, allowedTools });
-      rebuildClaudeMd();
-      const agent = getAgent(name);
+      const path = scaffoldAgent({ name, description, role, model, maxTurns, allowedTools }, root);
+      rebuildClaudeMd(root);
+      const agent = getAgent(name, root);
       res.json({ ok: true, path, agent });
     } catch (err: unknown) {
       const message = (err as Error).message || '';
@@ -271,12 +271,12 @@ export function createManagementRouter(channels: Channel[]): Router {
   // DELETE /agents/:name — Remove an agent
   router.delete('/agents/:name', (req, res) => {
     try {
-      const removed = removeAgent(req.params.name);
+      const removed = removeAgent(req.params.name, root);
       if (!removed) {
         res.status(404).json({ error: `Agent not found: ${req.params.name}` });
         return;
       }
-      rebuildClaudeMd();
+      rebuildClaudeMd(root);
       res.json({ ok: true });
     } catch (err) {
       logger.error('Failed to remove agent', { error: String(err) });
@@ -287,7 +287,7 @@ export function createManagementRouter(channels: Channel[]): Router {
   // POST /agents/:name/spawn — Spawn agent with SSE streaming
   router.post('/agents/:name/spawn', asyncHandler(async (req, res) => {
     const name = req.params.name as string;
-    const agent = getAgent(name);
+    const agent = getAgent(name, root);
     if (!agent) {
       res.status(404).json({ error: `Agent not found: ${name}` });
       return;
@@ -315,7 +315,6 @@ export function createManagementRouter(channels: Channel[]): Router {
 
     sendEvent('init', { agent: agent.name, model: agent.model });
 
-    const root = getRoot();
     const systemPrompt = buildSystemPrompt(agent);
     const model = agent.model || getClaudeModel();
 
@@ -437,7 +436,6 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /channels/config — Read channel config from identity.yaml
   router.get('/channels/config', (_req, res) => {
     try {
-      const root = getRoot();
       const identityPath = join(root, 'identity.yaml');
       const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, any>;
       res.json({ channels: identity.channels || {} });
@@ -455,7 +453,6 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      const root = getRoot();
       const identityPath = join(root, 'identity.yaml');
       const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, any>;
       if (!identity.channels) identity.channels = {};
@@ -472,7 +469,6 @@ export function createManagementRouter(channels: Channel[]): Router {
   router.delete('/channels/:type', (req, res) => {
     const type = req.params.type as string;
     try {
-      const root = getRoot();
       const identityPath = join(root, 'identity.yaml');
       const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, any>;
       if (identity.channels) {
@@ -493,20 +489,20 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /heartbeat — Parsed heartbeat tasks + state
   router.get('/heartbeat', (_req, res) => {
     try {
-      if (!existsSync(paths.heartbeat)) {
+      if (!existsSync(join(root, 'HEARTBEAT.md'))) {
         res.status(404).json({ error: 'HEARTBEAT.md not found' });
         return;
       }
 
-      const content = readFileSync(paths.heartbeat, 'utf-8');
-      const stat = statSync(paths.heartbeat);
+      const content = readFileSync(join(root, 'HEARTBEAT.md'), 'utf-8');
+      const stat = statSync(join(root, 'HEARTBEAT.md'));
       const tasks = parseHeartbeatTasks(content);
 
       // Read heartbeat state for last-run timestamps
       let state: Record<string, string> = {};
-      if (existsSync(paths.heartbeatState)) {
+      if (existsSync(join(root, 'heartbeat-state.json'))) {
         try {
-          const raw = JSON.parse(readFileSync(paths.heartbeatState, 'utf-8'));
+          const raw = JSON.parse(readFileSync(join(root, 'heartbeat-state.json'), 'utf-8'));
           state = raw.lastChecks || {};
         } catch {
           // Corrupt state file, ignore
@@ -538,7 +534,7 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      writeFileSync(paths.heartbeat, content, 'utf-8');
+      writeFileSync(join(root, 'HEARTBEAT.md'), content, 'utf-8');
       res.json({ ok: true });
     } catch (err) {
       logger.error('Failed to write heartbeat', { error: String(err) });
@@ -551,12 +547,12 @@ export function createManagementRouter(channels: Channel[]): Router {
     try {
       const maxLines = Math.min(parseInt(req.query.lines as string || '50') || 50, 500);
 
-      if (!existsSync(paths.heartbeatLog)) {
+      if (!existsSync(join(root, 'logs', 'heartbeat.log'))) {
         res.json({ content: '', exists: false });
         return;
       }
 
-      const full = readFileSync(paths.heartbeatLog, 'utf-8');
+      const full = readFileSync(join(root, 'logs', 'heartbeat.log'), 'utf-8');
       const lines = full.split('\n');
       const tail = lines.slice(-maxLines).join('\n');
 
@@ -571,7 +567,6 @@ export function createManagementRouter(channels: Channel[]): Router {
   router.post('/heartbeat/run', asyncHandler(async (_req, res) => {
     try {
       const { spawnSync } = await import('node:child_process');
-      const root = getRoot();
       const result = spawnSync('kyberbot', ['heartbeat', 'run'], {
         cwd: root,
         env: { ...process.env, KYBERBOT_ROOT: root },
@@ -610,7 +605,6 @@ export function createManagementRouter(channels: Channel[]): Router {
   // GET /brain-notes — List all memory files across all storage locations
   router.get('/brain-notes', (_req, res) => {
     try {
-      const root = getRoot();
       const allNotes: any[] = [];
 
       // Helper to scan a directory for .md files
@@ -687,7 +681,6 @@ export function createManagementRouter(channels: Channel[]): Router {
       return;
     }
     try {
-      const root = getRoot();
       const { storeConversation } = await import('../brain/store-conversation.js');
       await storeConversation(root, {
         prompt: text,
@@ -706,7 +699,6 @@ export function createManagementRouter(channels: Channel[]): Router {
     try {
       const service = req.params.service as string;
       const maxLines = Math.min(parseInt(req.query.lines as string || '100') || 100, 500);
-      const root = getRoot();
 
       // Map service names to log files
       const logFiles: Record<string, string> = {

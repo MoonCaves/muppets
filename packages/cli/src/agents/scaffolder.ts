@@ -23,15 +23,17 @@ export interface AgentScaffoldOptions {
 /**
  * Create a new agent from template
  */
-export function scaffoldAgent(options: AgentScaffoldOptions): string {
-  const agentPath = join(paths.agents, `${options.name}.md`);
+export function scaffoldAgent(options: AgentScaffoldOptions, root?: string): string {
+  const agentsDir = root ? join(root, '.claude', 'agents') : paths.agents;
+  const rootBase = root || paths.root;
+  const agentPath = join(agentsDir, `${options.name}.md`);
 
   if (existsSync(agentPath)) {
     throw new Error(`Agent already exists: ${options.name}`);
   }
 
   // Read template
-  const templatePath = join(paths.root, '.claude', 'agents', 'templates', 'agent-template.md');
+  const templatePath = join(rootBase, '.claude', 'agents', 'templates', 'agent-template.md');
   let template: string;
 
   if (existsSync(templatePath)) {

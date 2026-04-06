@@ -63,7 +63,7 @@ describe('chunkText (via indexDocument)', () => {
 
     await initializeEmbeddings();
 
-    const count = await indexDocument('doc-1', 'short', {
+    const count = await indexDocument('/tmp/test-root', 'doc-1', 'short', {
       type: 'note',
       source_path: 'test.md',
       timestamp: new Date().toISOString(),
@@ -82,7 +82,7 @@ describe('chunkText (via indexDocument)', () => {
 
     await initializeEmbeddings();
 
-    const count = await indexDocument('doc-2', 'This is a document with enough content to index.', {
+    const count = await indexDocument('/tmp/test-root', 'doc-2', 'This is a document with enough content to index.', {
       type: 'note',
       source_path: 'test2.md',
       timestamp: new Date().toISOString(),
@@ -113,7 +113,7 @@ describe('chunkText (via indexDocument)', () => {
 
     const content = 'This is a test document with enough content to be indexed properly. It has multiple sentences to verify chunking behavior.';
 
-    const count = await indexDocument('doc-3', content, {
+    const count = await indexDocument('/tmp/test-root', 'doc-3', content, {
       type: 'note',
       source_path: 'test3.md',
       title: 'Test Doc',
@@ -154,7 +154,7 @@ describe('chunkText (via indexDocument)', () => {
       data: sentences.map(() => ({ embedding: [0.1, 0.2] })),
     });
 
-    const count = await indexDocument('doc-4', longContent, {
+    const count = await indexDocument('/tmp/test-root', 'doc-4', longContent, {
       type: 'note',
       source_path: 'test4.md',
       timestamp: new Date().toISOString(),
@@ -227,7 +227,7 @@ describe('semanticSearch', () => {
     const { semanticSearch, initializeEmbeddings } = await import('./embeddings.js');
 
     await initializeEmbeddings();
-    const results = await semanticSearch('test query');
+    const results = await semanticSearch('/tmp/test-root', 'test query');
     expect(results).toEqual([]);
   });
 
@@ -266,7 +266,7 @@ describe('semanticSearch', () => {
       distances: [[0.2]],
     });
 
-    const results = await semanticSearch('test query');
+    const results = await semanticSearch('/tmp/test-root', 'test query');
 
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe('doc-1');

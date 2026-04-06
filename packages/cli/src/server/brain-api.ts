@@ -5,7 +5,6 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { getRoot } from '../config.js';
 import { searchEntities, getEntityContext, getEntityGraphStats, getEntityGraphDb } from '../brain/entity-graph.js';
 import { queryTimeline, getTimelineStats } from '../brain/timeline.js';
 import { hybridSearch } from '../brain/hybrid-search.js';
@@ -13,7 +12,7 @@ import { createLogger } from '../logger.js';
 
 const logger = createLogger('brain-api');
 
-export function createBrainRouter(): Router {
+export function createBrainRouter(root: string): Router {
   const router = Router();
 
   // Health check
@@ -24,7 +23,6 @@ export function createBrainRouter(): Router {
   // Search entities
   router.get('/entities', async (req: Request, res: Response) => {
     try {
-      const root = getRoot();
       const query = req.query.q as string || '';
       const type = req.query.type as string | undefined;
       const limit = Math.min(parseInt(req.query.limit as string || '20') || 20, 500);
@@ -43,7 +41,6 @@ export function createBrainRouter(): Router {
   // Get entity context
   router.get('/entities/:nameOrId', async (req: Request, res: Response) => {
     try {
-      const root = getRoot();
       const param = req.params.nameOrId as string;
       const nameOrId: string | number = /^\d+$/.test(param) ? parseInt(param) : param;
 
@@ -62,7 +59,6 @@ export function createBrainRouter(): Router {
   // Entity stats
   router.get('/entities-stats', async (_req: Request, res: Response) => {
     try {
-      const root = getRoot();
       const stats = await getEntityGraphStats(root);
       res.json(stats);
     } catch (error) {
@@ -74,7 +70,6 @@ export function createBrainRouter(): Router {
   // Query timeline
   router.get('/timeline', async (req: Request, res: Response) => {
     try {
-      const root = getRoot();
       const events = await queryTimeline(root, {
         start: req.query.start as string,
         end: req.query.end as string,
@@ -92,7 +87,6 @@ export function createBrainRouter(): Router {
   // Timeline stats
   router.get('/timeline-stats', async (_req: Request, res: Response) => {
     try {
-      const root = getRoot();
       const stats = await getTimelineStats(root);
       res.json(stats);
     } catch (error) {
@@ -104,7 +98,6 @@ export function createBrainRouter(): Router {
   // Entity graph for visualization (p5.js canvas)
   router.get('/graph', async (req: Request, res: Response) => {
     try {
-      const root = getRoot();
       const limit = Math.min(parseInt(req.query.limit as string || '100') || 100, 500);
       const entityId = req.query.entityId ? parseInt(req.query.entityId as string) : undefined;
       const types = req.query.types ? (req.query.types as string).split(',') : undefined;
@@ -180,7 +173,6 @@ export function createBrainRouter(): Router {
         res.status(400).json({ error: 'Query required' });
         return;
       }
-      const root = getRoot();
       const results = await hybridSearch(query, root, {
         limit: Math.min(parseInt(limit) || 20, 500),
         tier: tier || 'all',

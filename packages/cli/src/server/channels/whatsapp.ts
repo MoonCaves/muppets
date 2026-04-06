@@ -7,7 +7,6 @@
 
 import { createLogger } from '../../logger.js';
 import { getClaudeClient } from '../../claude.js';
-import { getRoot } from '../../config.js';
 import { Channel, ChannelMessage } from './types.js';
 import { join } from 'path';
 import { storeConversation } from '../../brain/store-conversation.js';
@@ -22,12 +21,14 @@ export class WhatsAppChannel implements Channel {
   private connected = false;
   private messageHandler: ((message: ChannelMessage) => Promise<void>) | null = null;
 
+  constructor(private root: string) {}
+
   async start(): Promise<void> {
     try {
       const baileys = await import('@whiskeysockets/baileys');
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
 
-      const authDir = join(getRoot(), 'data', 'whatsapp-auth');
+      const authDir = join(this.root, 'data', 'whatsapp-auth');
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -101,7 +102,7 @@ export class WhatsAppChannel implements Channel {
 
             // Fire-and-forget: store conversation in memory
             // skipEmbeddings: true — sleep agent handles ChromaDB indexing to avoid OOM
-            storeConversation(getRoot(), {
+            storeConversation(this.root, {
               prompt: text,
               response: reply,
               channel: 'whatsapp',

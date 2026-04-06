@@ -15,10 +15,11 @@ import { createLogger } from '../logger.js';
 const logger = createLogger('skills');
 
 /**
- * Discover all installed skills
+ * Discover all installed skills.
+ * If root is provided, uses that instead of the global paths (multi-agent safe).
  */
-export function loadInstalledSkills(): InstalledSkill[] {
-  const skillsDir = paths.skills;
+export function loadInstalledSkills(root?: string): InstalledSkill[] {
+  const skillsDir = root ? join(root, 'skills') : paths.skills;
 
   if (!existsSync(skillsDir)) {
     return [];
@@ -81,14 +82,14 @@ function parseSkillManifest(content: string): SkillManifest | null {
 /**
  * Get a specific skill by name
  */
-export function getSkill(name: string): InstalledSkill | null {
-  const skills = loadInstalledSkills();
+export function getSkill(name: string, root?: string): InstalledSkill | null {
+  const skills = loadInstalledSkills(root);
   return skills.find(s => s.name === name) || null;
 }
 
 /**
  * Check if a skill exists
  */
-export function hasSkill(name: string): boolean {
-  return getSkill(name) !== null;
+export function hasSkill(name: string, root?: string): boolean {
+  return getSkill(name, root) !== null;
 }

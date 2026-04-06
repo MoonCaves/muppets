@@ -11,11 +11,7 @@ import express from 'express';
 import { createLogger } from '../logger.js';
 import { getServerPort, getIdentity, getRoot } from '../config.js';
 import { authMiddleware, getApiToken } from '../middleware/auth.js';
-import { createBrainRouter } from './brain-api.js';
-import { executeHandler } from './execute-api.js';
-import { createWebApiRouter } from './web-api.js';
-import { createManagementRouter } from './management-api.js';
-import { chatSseHandler } from './chat-sse.js';
+import { createAgentRouter } from './agent-router.js';
 import { ServiceHandle } from '../types.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
@@ -23,17 +19,17 @@ import { Channel } from './channels/types.js';
 import { getMetrics, errorMiddleware } from '../monitoring.js';
 import { getServiceStatuses } from '../orchestrator.js';
 import http from 'http';
-import { join, dirname } from 'path';
-import { existsSync } from 'fs';
-import { fileURLToPath } from 'url';
 
 const logger = createLogger('server');
 
 const channels: Channel[] = [];
 
+export { channels };
+
 export async function startServer(options: {
   enableChannels?: boolean;
 } = {}): Promise<ServiceHandle> {
+  const root = getRoot();
   const app = express();
   const port = getServerPort();
 
@@ -58,42 +54,8 @@ export async function startServer(options: {
     });
   });
 
-  // Brain API (authenticated)
-  app.use('/brain', authMiddleware, createBrainRouter());
-
-  // Execute API (authenticated)
-  app.post('/api/execute', authMiddleware, executeHandler);
-
-  // Chat SSE (authenticated) — must be before the web router
-  app.post('/api/web/chat', authMiddleware, chatSseHandler);
-
-  // Web API (authenticated)
-  app.use('/api/web', authMiddleware, createWebApiRouter());
-
-  // Management API (authenticated) — skill/agent/channel/heartbeat CRUD
-  app.use('/api/web/manage', authMiddleware, createManagementRouter(channels));
-
-  // Serve web UI static files
-  try {
-    // Try to find @kyberbot/web dist directory
-    const webDistPaths = [
-      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'web', 'dist'),
-      join(process.cwd(), 'node_modules', '@kyberbot', 'web', 'dist'),
-    ];
-
-    for (const distPath of webDistPaths) {
-      if (existsSync(join(distPath, 'index.html'))) {
-        app.use('/ui', express.static(distPath));
-        app.get('/ui/*', (_req, res) => {
-          res.sendFile(join(distPath, 'index.html'));
-        });
-        logger.info(`Web UI serving from ${distPath}`);
-        break;
-      }
-    }
-  } catch (err) {
-    logger.debug('Web UI not available', { error: String(err) });
-  }
+  // Mount all agent routes via shared agent-router (authenticated)
+  app.use('/', authMiddleware, createAgentRouter(root, channels));
 
   // Start channels if configured
   if (options.enableChannels !== false) {
@@ -101,13 +63,13 @@ export async function startServer(options: {
       const identity = getIdentity();
 
       if (identity.channels?.telegram?.bot_token) {
-        const telegram = new TelegramChannel(identity.channels.telegram);
+        const telegram = new TelegramChannel(identity.channels.telegram, root);
         await telegram.start();
         channels.push(telegram);
       }
 
       if (identity.channels?.whatsapp?.enabled) {
-        const whatsapp = new WhatsAppChannel();
+        const whatsapp = new WhatsAppChannel(root);
         await whatsapp.start();
         channels.push(whatsapp);
       }

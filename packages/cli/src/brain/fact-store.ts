@@ -188,7 +188,7 @@ export async function storeFact(root: string, fact: FactInput): Promise<number> 
   try {
     if (isChromaAvailable()) {
       const chromaId = `fact_${fact.source_path.replace(/[^a-zA-Z0-9]/g, '_')}`;
-      await indexDocument(chromaId, fact.content, {
+      await indexDocument(root, chromaId, fact.content, {
         type: 'note',
         source_path: fact.source_path,
         title: `[fact] ${fact.content.slice(0, 80)}`,
