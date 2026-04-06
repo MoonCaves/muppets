@@ -114,13 +114,32 @@ export class FleetManager {
     });
 
     this.app.get('/fleet', (_req, res) => {
+      const uptimeMs = Date.now() - this.startedAt;
+      const uptimeSec = Math.floor(uptimeMs / 1000);
+      const h = Math.floor(uptimeSec / 3600);
+      const m = Math.floor((uptimeSec % 3600) / 60);
+      const uptimeStr = h > 0 ? `${h}h ${m}m` : `${m}m`;
+
+      const statuses = this.getAllStatuses();
+
       res.json({
-        agents: this.getAllStatuses(),
+        mode: 'fleet',
+        agents: statuses.map(s => ({
+          name: s.name,
+          status: s.status,
+          uptime: `${Math.floor(s.uptime / 1000)}s`,
+          services: [
+            { name: 'Heartbeat', status: s.services.heartbeat },
+            { name: 'Embeddings', status: s.services.embeddings },
+          ],
+          channels: s.services.channels,
+        })),
         sleep: {
-          currentAgent: this.sleepScheduler?.getCurrentAgent() || null,
-          running: this.sleepScheduler?.isRunning() || false,
+          current_agent: this.sleepScheduler?.getCurrentAgent() || null,
+          last_run: null,
         },
-        uptime: Date.now() - this.startedAt,
+        uptime: uptimeStr,
+        pid: process.pid,
       });
     });
 
