@@ -147,6 +147,47 @@ export class FleetManager {
       }
     });
 
+    // ── Bus API ──────────────────────────────────────────────────────────
+
+    // POST /fleet/bus/send — send message between agents
+    this.app.post('/fleet/bus/send', express.json(), async (req, res) => {
+      const { from, to, message, topic } = req.body;
+      if (!from || !to || !message) {
+        return res.status(400).json({ error: 'Missing from, to, or message' });
+      }
+      try {
+        const result = await this.bus.send({ from, to, type: 'query', payload: message, topic });
+        res.json({ ok: true, response: result });
+      } catch (error) {
+        res.status(500).json({ error: String(error) });
+      }
+    });
+
+    // POST /fleet/bus/broadcast — broadcast to all agents
+    this.app.post('/fleet/bus/broadcast', express.json(), async (req, res) => {
+      const { from, message, topic } = req.body;
+      if (!from || !message) {
+        return res.status(400).json({ error: 'Missing from or message' });
+      }
+      try {
+        await this.bus.send({ from, to: '*', type: 'notify', payload: message, topic });
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: String(error) });
+      }
+    });
+
+    // GET /fleet/bus/history — message history
+    this.app.get('/fleet/bus/history', (req, res) => {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const agent = req.query.agent as string;
+      let history = this.bus.getHistory(limit);
+      if (agent) {
+        history = history.filter(m => m.from === agent || m.to === agent);
+      }
+      res.json({ messages: history });
+    });
+
     // Per-agent routes with auth
     const fleetAuth = createFleetAuthMiddleware(authMap);
 

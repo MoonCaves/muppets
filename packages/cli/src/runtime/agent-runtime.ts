@@ -118,6 +118,27 @@ export class AgentRuntime {
       logger.warn(`Channel init failed for ${this.name}`, { error: String(error) });
     }
 
+    // Register on the agent bus for inter-agent messaging
+    if (this.bus) {
+      this.bus.registerAgent(this.name, async (msg) => {
+        // For now, just acknowledge — full Claude Code response is a future enhancement
+        logger.info(`[bus] ${this.name} received from ${msg.from}: ${msg.payload.slice(0, 100)}`);
+
+        // Store the inter-agent message in memory
+        try {
+          const { storeConversation } = await import('../brain/store-conversation.js');
+          await storeConversation(this.root, {
+            prompt: `[From ${msg.from}]: ${msg.payload}`,
+            response: `[Acknowledged by ${this.name}]`,
+            channel: 'agent-bus',
+            metadata: { from: msg.from, type: msg.type, topic: msg.topic },
+          });
+        } catch { /* best effort */ }
+
+        return `[${this.name}] Message received.`;
+      });
+    }
+
     this._status = 'running';
     logger.info(`Agent ${this.name} started`, {
       heartbeat: this.heartbeat ? 'running' : 'disabled',
@@ -211,4 +232,21 @@ export class AgentRuntime {
     }
     return '';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FLEET AWARENESS HELPER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build a system prompt section that makes an agent aware of other running agents.
+ * Can be injected into prompt building to enable inter-agent coordination.
+ */
+export function buildFleetAwarenessSection(bus: AgentBus, currentAgent: string): string {
+  const others = bus.getRegisteredAgents().filter(n => n !== currentAgent);
+  if (others.length === 0) return '';
+
+  return `\n## Other Agents\n\nAgents running alongside you: ${others.join(', ')}.\n` +
+    `To send a message: \`kyberbot bus send <agent> "<message>"\`\n` +
+    `To broadcast: \`kyberbot bus broadcast "<message>"\`\n`;
 }
