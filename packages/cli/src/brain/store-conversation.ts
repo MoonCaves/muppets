@@ -25,6 +25,22 @@ import { extractFactsRealtime } from './fact-extractor.js';
 const logger = createLogger('brain');
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SERIALIZATION QUEUE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Serialize storeConversation calls to prevent concurrent SQLite/subprocess
+ * operations from causing OOM crashes. better-sqlite3 + concurrent async
+ * access = 8GB heap spikes.
+ */
+let storeQueue: Promise<void> = Promise.resolve();
+
+function enqueue(fn: () => Promise<void>): Promise<void> {
+  storeQueue = storeQueue.then(fn, fn); // run fn after previous completes (or fails)
+  return storeQueue;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SEGMENT SPLITTING
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -164,7 +180,15 @@ function channelToSourceType(channel: string): string {
  * Store a conversation across all memory subsystems.
  * Call fire-and-forget — never throws, logs all errors internally.
  */
-export async function storeConversation(
+export function storeConversation(
+  root: string,
+  input: ConversationInput,
+  options: { entityStoplist?: string[]; skipEmbeddings?: boolean } = {}
+): Promise<void> {
+  return enqueue(() => storeConversationImpl(root, input, options));
+}
+
+async function storeConversationImpl(
   root: string,
   input: ConversationInput,
   options: { entityStoplist?: string[]; skipEmbeddings?: boolean } = {}
