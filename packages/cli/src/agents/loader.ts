@@ -18,8 +18,8 @@ const logger = createLogger('agents');
 /**
  * Discover all installed agents
  */
-export function loadInstalledAgents(): InstalledAgent[] {
-  const agentsDir = paths.agents;
+export function loadInstalledAgents(root?: string): InstalledAgent[] {
+  const agentsDir = root ? join(root, '.claude', 'agents') : paths.agents;
 
   if (!existsSync(agentsDir)) {
     return [];
@@ -84,14 +84,14 @@ function parseAgentFile(content: string): { manifest: AgentManifest; body: strin
 /**
  * Get a specific agent by name
  */
-export function getAgent(name: string): InstalledAgent | null {
-  const agents = loadInstalledAgents();
+export function getAgent(name: string, root?: string): InstalledAgent | null {
+  const agents = loadInstalledAgents(root);
   return agents.find(a => a.name === name) || null;
 }
 
 /**
  * Check if an agent exists
  */
-export function hasAgent(name: string): boolean {
-  return getAgent(name) !== null;
+export function hasAgent(name: string, root?: string): boolean {
+  return getAgent(name, root) !== null;
 }

@@ -68,7 +68,7 @@ describe('WhatsAppChannel', () => {
   let channel: InstanceType<typeof WhatsAppChannel>;
 
   beforeEach(() => {
-    channel = new WhatsAppChannel();
+    channel = new WhatsAppChannel('/tmp/test-root');
     mockEventHandlers.clear();
     mockComplete.mockReset();
     mockSendMessage.mockReset();

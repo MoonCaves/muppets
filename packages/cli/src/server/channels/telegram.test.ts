@@ -13,6 +13,7 @@ vi.mock('../../logger.js', () => ({
 // Mock config
 vi.mock('../../config.js', () => ({
   getAgentName: vi.fn(() => 'TestBot'),
+  getAgentNameForRoot: vi.fn(() => 'TestBot'),
   getRoot: vi.fn(() => '/mock/root'),
 }));
 
@@ -97,29 +98,29 @@ describe('TelegramChannel', () => {
 
   describe('constructor', () => {
     it('should set name to telegram', () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       expect(channel.name).toBe('telegram');
     });
 
     it('should start unconnected', () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       expect(channel.isConnected()).toBe(false);
     });
 
     it('should be unverified when no owner_chat_id provided', () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       expect(channel.isVerified()).toBe(false);
     });
 
     it('should be verified when owner_chat_id is provided', () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       expect(channel.isVerified()).toBe(true);
     });
   });
 
   describe('start()', () => {
     it('should create a Bot and register message handler', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       expect(mockBotOn).toHaveBeenCalledWith('message:text', expect.any(Function));
@@ -128,7 +129,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should enter verification mode when no owner_chat_id', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       await channel.start();
 
       expect(channel.isConnected()).toBe(true);
@@ -138,7 +139,7 @@ describe('TelegramChannel', () => {
 
   describe('stop()', () => {
     it('should stop the bot and set connected to false', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
       expect(channel.isConnected()).toBe(true);
 
@@ -148,7 +149,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should be safe to call when not started', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       await channel.stop(); // Should not throw
       expect(channel.isConnected()).toBe(false);
     });
@@ -156,12 +157,12 @@ describe('TelegramChannel', () => {
 
   describe('send()', () => {
     it('should throw if bot not started', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       await expect(channel.send('123', 'hello')).rejects.toThrow('Telegram bot not started');
     });
 
     it('should send message via bot API', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
       await channel.send('123', 'hello');
 
@@ -171,7 +172,7 @@ describe('TelegramChannel', () => {
 
   describe('onMessage()', () => {
     it('should register a custom message handler', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       const handler = vi.fn(async () => {});
       channel.onMessage(handler);
 
@@ -197,7 +198,7 @@ describe('TelegramChannel', () => {
 
   describe('message routing', () => {
     it('should ignore messages from non-owner', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -214,7 +215,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should route owner messages to Claude and reply', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -236,7 +237,7 @@ describe('TelegramChannel', () => {
 
     it('should skip reply when Claude returns empty response', async () => {
       mockComplete.mockResolvedValue('   ');
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -257,7 +258,7 @@ describe('TelegramChannel', () => {
     it('should chunk long messages over 4096 chars', async () => {
       const longResponse = 'A'.repeat(5000);
       mockComplete.mockResolvedValue(longResponse);
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -280,7 +281,7 @@ describe('TelegramChannel', () => {
 
     it('should reply with error message when Claude throws', async () => {
       mockComplete.mockRejectedValue(new Error('API error'));
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -299,7 +300,7 @@ describe('TelegramChannel', () => {
 
   describe('verification flow', () => {
     it('should accept correct verification code and set owner', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       await channel.start();
 
       expect(channel.isVerified()).toBe(false);
@@ -319,7 +320,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should reject incorrect verification code silently', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -337,7 +338,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should ignore non-start messages during verification', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token' });
+      channel = new TelegramChannel({ bot_token: 'test-token' }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -357,7 +358,7 @@ describe('TelegramChannel', () => {
 
   describe('/start command (post-verification)', () => {
     it('should clear history and send greeting on /start', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       await channel.start();
 
       const messageHandler = mockBotOn.mock.calls[0][1];
@@ -378,7 +379,7 @@ describe('TelegramChannel', () => {
 
   describe('message metadata', () => {
     it('should construct ChannelMessage with correct fields', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       const handler = vi.fn(async () => {});
       channel.onMessage(handler);
       await channel.start();
@@ -402,7 +403,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should fallback to first_name when username is not available', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       const handler = vi.fn(async () => {});
       channel.onMessage(handler);
       await channel.start();
@@ -420,7 +421,7 @@ describe('TelegramChannel', () => {
     });
 
     it('should fallback to unknown when no user info available', async () => {
-      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 });
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
       const handler = vi.fn(async () => {});
       channel.onMessage(handler);
       await channel.start();

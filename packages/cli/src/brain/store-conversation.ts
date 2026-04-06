@@ -33,20 +33,26 @@ const logger = createLogger('brain');
  * operations from causing OOM crashes. better-sqlite3 + concurrent async
  * access = 8GB heap spikes.
  */
-let storeQueue: Promise<void> = Promise.resolve();
-let storeActive = false;
+const storeQueues = new Map<string, Promise<void>>();
+const activeStores = new Set<string>();
 
-/** Returns true if a storeConversation call is currently in progress */
-export function isStoreActive(): boolean {
-  return storeActive;
+/**
+ * Returns true if a storeConversation call is currently in progress.
+ * If root is given, checks only that root. If no root, checks if any store is active.
+ */
+export function isStoreActive(root?: string): boolean {
+  if (root) return activeStores.has(root);
+  return activeStores.size > 0;
 }
 
-function enqueue(fn: () => Promise<void>): Promise<void> {
-  storeQueue = storeQueue.then(
-    async () => { storeActive = true; try { await fn(); } finally { storeActive = false; } },
-    async () => { storeActive = true; try { await fn(); } finally { storeActive = false; } }
+function enqueue(root: string, fn: () => Promise<void>): Promise<void> {
+  const current = storeQueues.get(root) || Promise.resolve();
+  const next = current.then(
+    async () => { activeStores.add(root); try { await fn(); } finally { activeStores.delete(root); } },
+    async () => { activeStores.add(root); try { await fn(); } finally { activeStores.delete(root); } }
   );
-  return storeQueue;
+  storeQueues.set(root, next);
+  return next;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -203,7 +209,7 @@ export function storeConversation(
   input: ConversationInput,
   options: { entityStoplist?: string[]; skipEmbeddings?: boolean } = {}
 ): Promise<void> {
-  return enqueue(() => storeConversationImpl(root, input, options));
+  return enqueue(root, () => storeConversationImpl(root, input, options));
 }
 
 async function storeConversationImpl(
@@ -340,7 +346,7 @@ async function storeConversationImpl(
           // Store segment in ChromaDB (for semantic search)
           if (isChromaAvailable()) {
             try {
-              await indexDocument(segId, seg.text, {
+              await indexDocument(root, segId, seg.text, {
                 type: 'conversation',
                 source_path: segPath,
                 title: fullTitle,
@@ -440,7 +446,7 @@ async function storeConversationImpl(
   const hasSegments = fullText.length > 250;
   try {
     if (isChromaAvailable() && !hasSegments) {
-      await indexDocument(conversationId, fullText, {
+      await indexDocument(root, conversationId, fullText, {
         type: 'conversation',
         source_path: sourcePath,
         title: `[${input.channel}] ${input.prompt.slice(0, 80)}`,

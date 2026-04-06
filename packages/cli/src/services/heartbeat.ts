@@ -10,10 +10,10 @@
  * - Logs to logs/heartbeat.log
  */
 
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { createLogger } from '../logger.js';
-import { getHeartbeatInterval, getIdentity, paths, getTimezone, getRoot } from '../config.js';
+import { getIdentityForRoot } from '../config.js';
 import { getClaudeClient } from '../claude.js';
 import { ServiceHandle } from '../types.js';
 import { storeConversation } from '../brain/store-conversation.js';
@@ -29,8 +29,14 @@ export function markBusy(isBusy: boolean): void {
   busy = isBusy;
 }
 
-export async function startHeartbeat(): Promise<ServiceHandle> {
-  const intervalMs = getHeartbeatInterval();
+export async function startHeartbeat(root: string): Promise<ServiceHandle> {
+  const identity = getIdentityForRoot(root);
+  const intervalStr = identity.heartbeat_interval || '30m';
+  // Parse: '30m' → 30*60*1000, '1h' → 60*60*1000
+  const match = intervalStr.match(/^(\d+)(m|h)$/);
+  const intervalMs = match
+    ? (match[2] === 'h' ? Number(match[1]) * 60 * 60 * 1000 : Number(match[1]) * 60 * 1000)
+    : 30 * 60 * 1000;
   logger.info(`Heartbeat interval: ${intervalMs / 1000 / 60} minutes`);
 
   running = true;
@@ -38,8 +44,8 @@ export async function startHeartbeat(): Promise<ServiceHandle> {
   // Initial delay before first tick
   const initialDelay = 5 * 60 * 1000; // 5 minutes
   setTimeout(() => {
-    tick();
-    intervalId = setInterval(tick, intervalMs);
+    tick(root);
+    intervalId = setInterval(() => tick(root), intervalMs);
   }, initialDelay);
 
   return {
@@ -54,7 +60,7 @@ export async function startHeartbeat(): Promise<ServiceHandle> {
   };
 }
 
-async function tick(): Promise<void> {
+async function tick(root: string): Promise<void> {
   // Skip if user is actively chatting
   if (busy) {
     logger.debug('Skipping heartbeat — user session is active');
@@ -62,7 +68,7 @@ async function tick(): Promise<void> {
   }
 
   // Skip if HEARTBEAT.md doesn't exist or is empty
-  const heartbeatPath = paths.heartbeat;
+  const heartbeatPath = join(root, 'HEARTBEAT.md');
   if (!existsSync(heartbeatPath)) {
     logger.debug('No HEARTBEAT.md found — skipping');
     return;
@@ -75,13 +81,13 @@ async function tick(): Promise<void> {
   }
 
   // Check active hours
-  if (!isWithinActiveHours()) {
+  if (!isWithinActiveHours(root)) {
     logger.debug('Outside active hours — skipping');
     return;
   }
 
   try {
-    const stateFile = paths.heartbeatState;
+    const stateFile = join(root, 'heartbeat-state.json');
     const state = existsSync(stateFile)
       ? JSON.parse(readFileSync(stateFile, 'utf-8'))
       : { lastChecks: {} };
@@ -92,7 +98,7 @@ async function tick(): Promise<void> {
     if (skillRefs) {
       for (const ref of skillRefs) {
         const skillName = ref.replace(/\*\*Skill\*\*:\s*/, '').trim();
-        const skill = getSkill(skillName);
+        const skill = getSkill(skillName, root);
         if (skill) {
           try {
             const skillContent = readFileSync(join(skill.path, 'SKILL.md'), 'utf-8');
@@ -124,7 +130,7 @@ async function tick(): Promise<void> {
       '',
       ...(skillSections.length > 0 ? skillSections : []),
       `Current time: ${new Date().toISOString()}`,
-      `Timezone: ${getTimezone()}`,
+      `Timezone: ${getIdentityForRoot(root).timezone || Intl.DateTimeFormat().resolvedOptions().timeZone}`,
     ].join('\n');
 
     const client = getClaudeClient();
@@ -147,16 +153,17 @@ async function tick(): Promise<void> {
       logger.info('Heartbeat result:', { result: result.substring(0, 200), heapMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) });
 
       // Log to heartbeat log
-      const logDir = dirname(paths.heartbeatLog);
+      const heartbeatLog = join(root, 'logs', 'heartbeat.log');
+      const logDir = dirname(heartbeatLog);
       mkdirSync(logDir, { recursive: true });
       appendFileSync(
-        paths.heartbeatLog,
+        heartbeatLog,
         `\n--- ${new Date().toISOString()} ---\n${result}\n`,
         'utf-8'
       );
 
       // Fire-and-forget: store heartbeat result in memory
-      storeConversation(getRoot(), {
+      storeConversation(root, {
         prompt: 'Heartbeat task execution',
         response: result,
         channel: 'heartbeat',
@@ -167,14 +174,14 @@ async function tick(): Promise<void> {
   }
 }
 
-function isWithinActiveHours(): boolean {
+function isWithinActiveHours(root: string): boolean {
   try {
-    const identity = getIdentity();
+    const identity = getIdentityForRoot(root);
     const activeHours = identity.heartbeat_active_hours;
 
     if (!activeHours) return true; // No restriction
 
-    const tz = activeHours.timezone || getTimezone();
+    const tz = activeHours.timezone || identity.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const now = new Date();
     const formatter = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,

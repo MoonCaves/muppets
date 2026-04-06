@@ -602,6 +602,15 @@ export function createOnboardCommand(): Command {
         console.log(chalk.green('  + backup           -- GitHub backup enabled'));
       }
 
+      // Auto-register in ~/.kyberbot/registry.yaml
+      try {
+        const { registerAgent } = await import('../registry.js');
+        registerAgent(agentName, root);
+        console.log(chalk.green('  + ~/.kyberbot/registry.yaml -- Agent registered'));
+      } catch {
+        // Non-fatal — agent works without registry
+      }
+
       console.log();
       console.log(PRIMARY.bold(`  ${agentName} is alive.`));
       console.log();

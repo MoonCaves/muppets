@@ -52,7 +52,7 @@ export function createBrainCommand(): Command {
         console.log(chalk.dim(`Querying brain: "${prompt}"\n`));
 
         // Retrieve relevant context via hybrid search
-        await initializeEmbeddings();
+        await initializeEmbeddings(root);
         const results = await hybridSearch(prompt, root, { limit });
 
         if (results.length === 0) {
@@ -124,7 +124,8 @@ export function createBrainCommand(): Command {
           process.exit(1);
         }
 
-        await initializeEmbeddings();
+        const root = getRoot();
+        await initializeEmbeddings(root);
 
         if (!isChromaAvailable()) {
           console.error(chalk.red('ChromaDB not available. Start with: docker-compose up -d'));
@@ -137,7 +138,7 @@ export function createBrainCommand(): Command {
 
         console.log(chalk.dim(`Indexing: ${title} (${type})`));
 
-        const chunks = await indexDocument(id, content, {
+        const chunks = await indexDocument(root, id, content, {
           type,
           source_path: filePath,
           title,
@@ -168,7 +169,7 @@ export function createBrainCommand(): Command {
         const root = getRoot();
         const limit = parseInt(options.limit) || 10;
 
-        await initializeEmbeddings();
+        await initializeEmbeddings(root);
 
         console.log(chalk.dim(`Searching: "${query}"\n`));
 
@@ -226,8 +227,8 @@ export function createBrainCommand(): Command {
         const root = getRoot();
 
         // ChromaDB status
-        await initializeEmbeddings();
-        const indexStats = await getIndexStats();
+        await initializeEmbeddings(root);
+        const indexStats = await getIndexStats(root);
 
         // Timeline stats
         let timelineStats;

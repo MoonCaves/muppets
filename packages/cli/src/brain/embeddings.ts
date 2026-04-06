@@ -10,6 +10,7 @@
 import { ChromaClient, Collection, type IEmbeddingFunction } from 'chromadb';
 import OpenAI from 'openai';
 import { createLogger } from '../logger.js';
+import { getIdentity, getIdentityForRoot } from '../config.js';
 
 const logger = createLogger('embeddings');
 
@@ -38,8 +39,31 @@ export interface SearchResult {
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Derive a per-agent ChromaDB collection name.
+ * If root is given, uses getIdentityForRoot (multi-agent safe).
+ * Falls back to getIdentity() or 'kyberbot_data'.
+ */
+function getCollectionNameForRoot(root?: string): string {
+  try {
+    const identity = root ? getIdentityForRoot(root) : getIdentity();
+    if (identity.agent_name) {
+      const sanitized = identity.agent_name
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '_')
+        .replace(/^[^a-z0-9]+/, '')
+        .replace(/[^a-z0-9]+$/, '');
+      if (sanitized.length >= 1) {
+        return `kyberbot_${sanitized}`;
+      }
+    }
+  } catch {
+    // identity.yaml not available — use default
+  }
+  return 'kyberbot_data';
+}
+
 const CONFIG = {
-  COLLECTION_NAME: 'kyberbot_data',
   CHUNK_SIZE: 300,
   CHUNK_OVERLAP: 75,
   MAX_RESULTS: 20,
@@ -50,11 +74,14 @@ const CONFIG = {
 // CLIENTS (Lazy initialization)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Shared clients (one connection regardless of how many agents)
 let chromaClient: ChromaClient | null = null;
 let openaiClient: OpenAI | null = null;
-let collection: Collection | null = null;
 let chromaInitialized = false;
 let chromaAvailable = false;
+
+// Per-agent collections
+const collections = new Map<string, Collection>();
 
 function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
@@ -85,55 +112,87 @@ async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   return response.data.map((d) => d.embedding);
 }
 
-export async function initializeEmbeddings(): Promise<boolean> {
-  if (chromaInitialized) return chromaAvailable;
-  chromaInitialized = true;
+export async function initializeEmbeddings(root?: string): Promise<boolean> {
+  // If ChromaDB client not yet initialized, set it up
+  if (!chromaInitialized) {
+    chromaInitialized = true;
 
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey) {
-    logger.warn('OPENAI_API_KEY not set - embeddings disabled');
-    return false;
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      logger.warn('OPENAI_API_KEY not set - embeddings disabled');
+      return false;
+    }
+
+    logger.info('Initializing ChromaDB...');
+
+    try {
+      const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8001';
+      chromaClient = new ChromaClient({ path: chromaUrl });
+      await chromaClient.heartbeat();
+      chromaAvailable = true;
+      logger.info(`ChromaDB client connected`, { url: chromaUrl });
+    } catch {
+      logger.warn('ChromaDB not available - run: docker-compose up -d');
+      chromaAvailable = false;
+      return false;
+    }
   }
 
-  logger.info('Initializing ChromaDB...');
+  if (!chromaAvailable || !chromaClient) return false;
 
-  try {
-    // Connect to ChromaDB server
-    const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8001';
-    const url = new URL(chromaUrl);
-    chromaClient = new ChromaClient({
-      path: chromaUrl,
-    });
+  // Initialize per-agent collection if root is given and not yet loaded
+  if (root && !collections.has(root)) {
+    try {
+      const openaiEmbedder: IEmbeddingFunction = {
+        generate: async (texts: string[]): Promise<number[][]> => {
+          return generateEmbeddings(texts);
+        },
+      };
 
-    // Test connection
-    await chromaClient.heartbeat();
+      const collectionName = getCollectionNameForRoot(root);
+      const col = await chromaClient.getOrCreateCollection({
+        name: collectionName,
+        embeddingFunction: openaiEmbedder,
+        metadata: {
+          description: 'KyberBot semantic search index',
+          'hnsw:space': 'cosine',
+        },
+      });
 
-    // Create embedding function wrapper for ChromaDB
-    const openaiEmbedder: IEmbeddingFunction = {
-      generate: async (texts: string[]): Promise<number[][]> => {
-        return generateEmbeddings(texts);
-      },
-    };
+      const count = await col.count();
+      logger.info(`ChromaDB collection ready`, { collection: collectionName, documents: count });
+      collections.set(root, col);
+    } catch (error) {
+      logger.error('Failed to initialize collection', { error: String(error) });
+    }
+  } else if (!root && collections.size === 0) {
+    // Backward compat: no root given, use legacy getCollectionName
+    try {
+      const openaiEmbedder: IEmbeddingFunction = {
+        generate: async (texts: string[]): Promise<number[][]> => {
+          return generateEmbeddings(texts);
+        },
+      };
 
-    // Get or create collection with our OpenAI embedding function
-    collection = await chromaClient.getOrCreateCollection({
-      name: CONFIG.COLLECTION_NAME,
-      embeddingFunction: openaiEmbedder,
-      metadata: {
-        description: 'KyberBot semantic search index',
-        'hnsw:space': 'cosine',
-      },
-    });
+      const collectionName = getCollectionNameForRoot();
+      const col = await chromaClient.getOrCreateCollection({
+        name: collectionName,
+        embeddingFunction: openaiEmbedder,
+        metadata: {
+          description: 'KyberBot semantic search index',
+          'hnsw:space': 'cosine',
+        },
+      });
 
-    const count = await collection.count();
-    logger.info(`ChromaDB connected`, { documents: count, url: chromaUrl });
-    chromaAvailable = true;
-    return true;
-  } catch (error) {
-    logger.warn('ChromaDB not available - run: docker-compose up -d');
-    chromaAvailable = false;
-    return false;
+      const count = await col.count();
+      logger.info(`ChromaDB connected`, { collection: collectionName, documents: count });
+      collections.set('__default__', col);
+    } catch (error) {
+      logger.error('Failed to initialize default collection', { error: String(error) });
+    }
   }
+
+  return true;
 }
 
 export function isChromaAvailable(): boolean {
@@ -145,12 +204,16 @@ export function isChromaAvailable(): boolean {
  * will re-establish connections. Used by the benchmark harness to reset between
  * conversations after deleting the ChromaDB collection.
  */
-export function resetEmbeddings(): void {
-  chromaClient = null;
-  openaiClient = null;
-  collection = null;
-  chromaInitialized = false;
-  chromaAvailable = false;
+export function resetEmbeddings(root?: string): void {
+  if (root) {
+    collections.delete(root);
+  } else {
+    chromaClient = null;
+    openaiClient = null;
+    collections.clear();
+    chromaInitialized = false;
+    chromaAvailable = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -193,14 +256,16 @@ function chunkText(text: string): TextChunk[] {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function indexDocument(
+  root: string,
   id: string,
   content: string,
   metadata: DocumentMetadata
 ): Promise<number> {
   if (!chromaInitialized) {
-    await initializeEmbeddings();
+    await initializeEmbeddings(root);
   }
 
+  const collection = collections.get(root) || collections.get('__default__');
   if (!chromaAvailable || !collection) {
     logger.debug(`Skipping indexing (ChromaDB not available): ${id}`);
     return 0;
@@ -258,6 +323,7 @@ export async function indexDocument(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function semanticSearch(
+  root: string,
   query: string,
   options: {
     limit?: number;
@@ -265,9 +331,10 @@ export async function semanticSearch(
   } = {}
 ): Promise<SearchResult[]> {
   if (!chromaInitialized) {
-    await initializeEmbeddings();
+    await initializeEmbeddings(root);
   }
 
+  const collection = collections.get(root) || collections.get('__default__');
   if (!chromaAvailable || !collection) {
     logger.warn('Semantic search not available - ChromaDB not connected');
     return [];
@@ -329,14 +396,15 @@ export async function semanticSearch(
 // STATS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export async function getIndexStats(): Promise<{
+export async function getIndexStats(root?: string): Promise<{
   totalChunks: number;
   available: boolean;
 }> {
   if (!chromaInitialized) {
-    await initializeEmbeddings();
+    await initializeEmbeddings(root);
   }
 
+  const collection = root ? collections.get(root) : (collections.get('__default__') || collections.values().next().value);
   if (!chromaAvailable || !collection) {
     return { totalChunks: 0, available: false };
   }

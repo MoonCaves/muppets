@@ -5,12 +5,17 @@
  */
 
 import { randomUUID } from 'crypto';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 import { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../logger.js';
 
 const logger = createLogger('auth');
 
 let apiToken: string | null = null;
+
+// Per-root token cache (for multi-agent runtime — Phase 3)
+const agentTokens = new Map<string, string>();
 
 export function getApiToken(): string {
   if (apiToken) return apiToken;
@@ -88,6 +93,58 @@ export function authMiddleware(
   }
 
   next();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PER-ROOT TOKEN SUPPORT (for multi-agent runtime)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Load the API token for a specific agent root by reading its .env file.
+ */
+export function loadTokenForRoot(root: string): string | null {
+  const cached = agentTokens.get(root);
+  if (cached) return cached;
+
+  const envPath = join(root, '.env');
+  if (!existsSync(envPath)) return null;
+
+  try {
+    const content = readFileSync(envPath, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('KYBERBOT_API_TOKEN=')) {
+        let value = trimmed.slice('KYBERBOT_API_TOKEN='.length).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        if (value) {
+          agentTokens.set(root, value);
+          return value;
+        }
+      }
+    }
+  } catch {
+    // .env read failed
+  }
+  return null;
+}
+
+/**
+ * Validate a token against a specific agent root.
+ */
+export function validateTokenForRoot(token: string, root: string): boolean {
+  const expected = loadTokenForRoot(root);
+  return expected ? token === expected : false;
+}
+
+/**
+ * Clear cached token for a root (e.g., after token rotation).
+ */
+export function clearTokenCache(root?: string): void {
+  if (root) agentTokens.delete(root);
+  else agentTokens.clear();
 }
 
 export function optionalAuthMiddleware(

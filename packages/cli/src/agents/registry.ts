@@ -31,8 +31,9 @@ export function buildAgentSection(agents: InstalledAgent[]): string {
  * Remove an agent file.
  * Caller is responsible for triggering CLAUDE.md rebuild (to avoid circular deps).
  */
-export function removeAgent(name: string): boolean {
-  const agentPath = join(paths.agents, `${name}.md`);
+export function removeAgent(name: string, root?: string): boolean {
+  const agentsDir = root ? join(root, '.claude', 'agents') : paths.agents;
+  const agentPath = join(agentsDir, `${name}.md`);
 
   if (!existsSync(agentPath)) {
     return false;
