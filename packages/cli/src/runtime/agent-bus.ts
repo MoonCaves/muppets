@@ -76,6 +76,8 @@ export class AgentBus extends EventEmitter {
 
     const msg: AgentMessage = {
       ...message,
+      from: message.from.toLowerCase(),
+      to: message.to === '*' ? '*' : message.to.toLowerCase(),
       id: randomUUID(),
       depth: (message as any).depth || 0,
       timestamp: new Date().toISOString(),
@@ -93,14 +95,29 @@ export class AgentBus extends EventEmitter {
     this.emit('message', msg);
 
     if (msg.to === '*') {
-      // Broadcast — notify all agents except sender
+      // Broadcast — notify all agents except sender, store each response
       for (const [name, handler] of this.handlers) {
-        if (name !== msg.from && name !== msg.from.toLowerCase()) {
-          handler(msg).catch((err) =>
+        if (name !== msg.from) {
+          handler(msg).then((responseText) => {
+            const response: AgentMessage = {
+              id: randomUUID(),
+              from: name,
+              to: msg.from,
+              type: 'response',
+              payload: responseText,
+              replyTo: msg.id,
+              timestamp: new Date().toISOString(),
+            };
+            try { saveBusMessage(response); } catch {}
+            this.history.push(response);
+            this.emit('message', response);
+          }).catch((err) =>
             logger.error(`Bus delivery to ${name} failed`, { error: String(err) })
           );
         }
       }
+      // Check subscriptions for the broadcast
+      this.checkSubscriptions(msg);
       return null;
     }
 

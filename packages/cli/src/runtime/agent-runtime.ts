@@ -214,7 +214,7 @@ export class AgentRuntime {
       const client = getClaudeClient();
       const response = await client.complete(prompt, {
         system: systemPrompt,
-        model: (this.identity.claude?.model as 'haiku' | 'sonnet' | 'opus') || 'sonnet',
+        model: 'sonnet' as const, // Always use sonnet for bus responses (faster + cheaper)
         maxTokens: 1024,
       });
       return response;
