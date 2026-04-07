@@ -15,6 +15,8 @@ import { AgentBus } from './agent-bus.js';
 import { FleetSleepScheduler } from './fleet-sleep-scheduler.js';
 import { createFleetAuthMiddleware } from './fleet-auth.js';
 import { getMetrics, errorMiddleware } from '../monitoring.js';
+import { startTunnel, getTunnelUrl } from '../services/tunnel.js';
+import { ServiceHandle } from '../types.js';
 
 const logger = createLogger('fleet');
 
@@ -24,6 +26,7 @@ export class FleetManager {
   private app: express.Express | null = null;
   private sleepScheduler: FleetSleepScheduler | null = null;
   private agentServers: http.Server[] = [];
+  private tunnelHandles = new Map<string, ServiceHandle>();
   private bus: AgentBus;
   private startedAt = 0;
 
@@ -135,7 +138,7 @@ export class FleetManager {
             { name: 'Heartbeat', status: s.services.heartbeat },
             { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
             { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
-            { name: 'Tunnel', status: s.status === 'running' && this.agents.get(s.name)?.identity.tunnel?.enabled ? 'stopped' : 'disabled' },
+            { name: 'Tunnel', status: this.tunnelHandles.has(s.name) ? 'running' : (this.agents.get(s.name)?.identity.tunnel?.enabled ? 'stopped' : 'disabled') },
           ],
           channels: s.services.channels,
         })),
@@ -268,7 +271,7 @@ export class FleetManager {
               { name: 'Heartbeat', status: s.services.heartbeat },
               { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
               { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
-              { name: 'Tunnel', status: agent.identity.tunnel?.enabled ? 'stopped' : 'disabled' },
+              { name: 'Tunnel', status: this.tunnelHandles.has(name) ? 'running' : (agent.identity.tunnel?.enabled ? 'stopped' : 'disabled') },
             ],
             errors: 0,
             memory: {},
@@ -292,6 +295,23 @@ export class FleetManager {
       } catch (error) {
         logger.warn(`Could not bind agent ${name} to port ${agentPort}`, { error: String(error) });
       }
+    }
+
+    // Start tunnels for agents that have them configured
+    for (const [name, agent] of this.agents) {
+      if (!agent.identity.tunnel?.enabled) continue;
+      const tunnelPort = agent.identity.server?.port || port;
+      try {
+        const handle = await startTunnel(tunnelPort);
+        this.tunnelHandles.set(name, handle);
+        const url = getTunnelUrl();
+        logger.info(`Tunnel started for ${name}`, { port: tunnelPort, url });
+      } catch (error) {
+        logger.warn(`Tunnel failed for ${name}`, { error: String(error) });
+      }
+      // Only start one tunnel at a time (ngrok free tier limitation)
+      // Future: support multiple tunnels with paid ngrok
+      break;
     }
 
     // Start sleep scheduler
@@ -334,6 +354,12 @@ export class FleetManager {
         logger.error(`Failed to stop agent ${name}`, { error: String(error) });
       }
     }
+
+    // Stop tunnels
+    for (const [name, handle] of this.tunnelHandles) {
+      try { await handle.stop(); } catch {}
+    }
+    this.tunnelHandles.clear();
 
     // Stop per-agent servers
     for (const agentServer of this.agentServers) {
