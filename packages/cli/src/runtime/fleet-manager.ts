@@ -223,10 +223,12 @@ export class FleetManager {
       this.app.use(`/agent/${name}`, fleetAuth, agent.createRouter());
     }
 
-    // Backward compat: if only 1 agent, mount at root too
-    if (this.agents.size === 1) {
-      const [, agent] = [...this.agents.entries()][0];
-      this.app.use('/', fleetAuth, agent.createRouter());
+    // Mount first agent at root too — needed for:
+    // 1. Single-agent backward compat
+    // 2. Desktop app before fleet mode is detected (fetches root URLs initially)
+    const firstAgent = [...this.agents.values()][0];
+    if (firstAgent) {
+      this.app.use('/', fleetAuth, firstAgent.createRouter());
     }
 
     // Error middleware
