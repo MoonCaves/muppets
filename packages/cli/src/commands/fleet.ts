@@ -73,12 +73,10 @@ function getRunningPid(name: string): number | null {
   }
 }
 
-async function probeHealth(port: number): Promise<boolean> {
+async function probeHealth(port: number, remoteUrl?: string): Promise<boolean> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`http://localhost:${port}/health`, { signal: controller.signal });
-    clearTimeout(timeout);
+    const url = remoteUrl ? `${remoteUrl}/health` : `http://localhost:${port}/health`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
     return res.ok;
   } catch {
     return false;
@@ -114,38 +112,48 @@ export function createFleetCommand(): Command {
 
       // Header
       const nameW = 14;
-      const portW = 6;
+      const typeW = 8;
       const statusW = 10;
       console.log(
         '  ' +
         chalk.bold('Name'.padEnd(nameW)) +
-        chalk.bold('Port'.padEnd(portW)) +
+        chalk.bold('Type'.padEnd(typeW)) +
         chalk.bold('Status'.padEnd(statusW)) +
-        chalk.bold('Root')
+        chalk.bold('Location')
       );
-      console.log('  ' + '─'.repeat(60));
+      console.log('  ' + '─'.repeat(70));
 
       for (const name of names) {
         const entry = agents[name];
-        const port = getPortForRoot(entry.root);
-        const pid = getRunningPid(name);
-        const healthy = pid ? await probeHealth(port) : false;
+        const isRemote = entry.type === 'remote';
 
         let status: string;
-        if (healthy) {
-          status = chalk.green('● running');
-        } else if (pid) {
-          status = chalk.yellow('● starting');
+        if (isRemote) {
+          // Probe remote health
+          const healthy = entry.remoteUrl ? await probeHealth(0, entry.remoteUrl) : false;
+          status = healthy ? chalk.green('● online') : chalk.gray('○ offline');
         } else {
-          status = chalk.gray('○ stopped');
+          const port = getPortForRoot(entry.root || '');
+          const pid = getRunningPid(name);
+          const healthy = pid ? await probeHealth(port) : false;
+          if (healthy) {
+            status = chalk.green('● running');
+          } else if (pid) {
+            status = chalk.yellow('● starting');
+          } else {
+            status = chalk.gray('○ stopped');
+          }
         }
+
+        const typeLabel = isRemote ? ACCENT('remote') : DIM('local');
+        const location = isRemote ? (entry.remoteUrl || '') : (entry.root || '');
 
         console.log(
           '  ' +
           ACCENT(name.padEnd(nameW)) +
-          String(port).padEnd(portW) +
-          status.padEnd(statusW + 10) + // extra padding for ANSI codes
-          DIM(entry.root)
+          typeLabel.padEnd(typeW + 10) + // extra for ANSI
+          status.padEnd(statusW + 10) +
+          DIM(location)
         );
       }
       console.log();
@@ -169,6 +177,26 @@ export function createFleetCommand(): Command {
       try {
         registerAgent(agentName, root);
         console.log(PRIMARY(`Registered "${agentName}" → ${root}`));
+      } catch (error) {
+        console.error(chalk.red(`Failed: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+      }
+    });
+
+  // ─────────────────────────────────────────────────────────────
+  // fleet register-remote <name>
+  // ─────────────────────────────────────────────────────────────
+  fleet
+    .command('register-remote <name>')
+    .description('Register a remote agent via ngrok tunnel URL')
+    .requiredOption('--url <url>', 'Remote agent URL (e.g., https://xyz.ngrok.dev)')
+    .requiredOption('--token <token>', 'Remote agent API token')
+    .action(async (name: string, options: { url: string; token: string }) => {
+      console.log(DIM(`Verifying remote agent at ${options.url}...`));
+      try {
+        const { registerRemoteAgent } = await import('../registry.js');
+        await registerRemoteAgent(name, options.url, options.token);
+        console.log(PRIMARY(`Registered remote agent "${name}" → ${options.url}`));
       } catch (error) {
         console.error(chalk.red(`Failed: ${error instanceof Error ? error.message : error}`));
         process.exit(1);
@@ -371,7 +399,7 @@ export function createFleetCommand(): Command {
       for (const name of names) {
         total++;
         const entry = agents[name];
-        const port = getPortForRoot(entry.root);
+        const port = entry.root ? getPortForRoot(entry.root) : 0;
         const pid = getRunningPid(name);
         const healthy = pid ? await probeHealth(port) : false;
 
