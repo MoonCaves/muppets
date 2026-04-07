@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { createBrainRouter } from './brain-api.js';
 import { createWebApiRouter } from './web-api.js';
 import { createManagementRouter } from './management-api.js';
+import { createBusApiRouter } from './bus-api.js';
 import { chatSseHandler } from './chat-sse.js';
 import { executeHandler } from './execute-api.js';
 import { Channel } from './channels/types.js';
@@ -37,6 +38,9 @@ export function createAgentRouter(root: string, channels: Channel[]): Router {
 
   // Web API
   router.use('/api/web', createWebApiRouter(root));
+
+  // Bus API (receives messages from remote agents/fleet)
+  router.use('/api/bus', createBusApiRouter(root));
 
   // Management API
   router.use('/api/web/manage', createManagementRouter(channels, root));

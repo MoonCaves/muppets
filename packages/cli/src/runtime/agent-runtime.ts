@@ -170,58 +170,11 @@ export class AgentRuntime {
   }
 
   /**
-   * Handle an incoming bus message using Claude with brain context.
+   * Handle an incoming bus message using the shared handler.
    */
   private async handleBusMessage(msg: import('./agent-bus.js').AgentMessage): Promise<string> {
-    const { getClaudeClient } = await import('../claude.js');
-    const { hybridSearch } = await import('../brain/hybrid-search.js');
-
-    // Retrieve relevant context from this agent's brain
-    let context = '';
-    try {
-      const results = await hybridSearch(msg.payload, this.root, { limit: 5 });
-      if (results.length > 0) {
-        context = results
-          .map((r, i) => `[${i + 1}] ${r.title}: ${r.content.slice(0, 300)}`)
-          .join('\n\n');
-      }
-    } catch {
-      // Brain search failed — respond without context
-    }
-
-    // Read SOUL.md for personality
-    let soul = '';
-    try {
-      const { readFileSync } = await import('fs');
-      const { join } = await import('path');
-      const soulPath = join(this.root, 'SOUL.md');
-      soul = readFileSync(soulPath, 'utf-8').slice(0, 500);
-    } catch { /* no soul file */ }
-
-    const systemPrompt = [
-      `You are ${this.name}.`,
-      soul ? `Your identity:\n${soul}` : '',
-      `You received a message from another AI agent named ${msg.from}.`,
-      msg.topic ? `Topic: ${msg.topic}` : '',
-      'Respond helpfully and concisely based on your knowledge and the context below.',
-      'Keep your response under 500 words.',
-      context ? `\nRelevant context from your memory:\n\n${context}` : '',
-    ].filter(Boolean).join('\n');
-
-    const prompt = msg.payload;
-
-    try {
-      const client = getClaudeClient();
-      const response = await client.complete(prompt, {
-        system: systemPrompt,
-        model: 'sonnet' as const, // Always use sonnet for bus responses (faster + cheaper)
-        maxTokens: 1024,
-      });
-      return response;
-    } catch (error) {
-      logger.error(`[bus] Claude call failed for ${this.name}`, { error: String(error) });
-      return `[${this.name}] I received your message but couldn't generate a full response right now.`;
-    }
+    const { handleIncomingBusMessage } = await import('./bus-handler.js');
+    return handleIncomingBusMessage(this.root, this.name, msg);
   }
 
   /**

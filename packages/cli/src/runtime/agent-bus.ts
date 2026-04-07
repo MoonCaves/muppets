@@ -37,9 +37,17 @@ export type AgentMessageHandler = (msg: AgentMessage) => Promise<string>;
 // BUS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+interface RemoteAgent {
+  name: string;
+  baseUrl: string;
+  apiToken: string;
+  online: boolean;
+}
+
 export class AgentBus extends EventEmitter {
   private history: AgentMessage[] = [];
   private handlers = new Map<string, AgentMessageHandler>();
+  private remoteAgents = new Map<string, RemoteAgent>();
   private sendCounts = new Map<string, { count: number; resetAt: number }>();
   private readonly MAX_SENDS_PER_HOUR = 10;
   private pendingNotifications = new Map<string, AgentMessage[]>();
@@ -56,7 +64,67 @@ export class AgentBus extends EventEmitter {
   }
 
   getRegisteredAgents(): string[] {
-    return [...this.handlers.keys()];
+    return [...this.handlers.keys(), ...this.remoteAgents.keys()];
+  }
+
+  // ── Remote agent management ──
+
+  registerRemoteAgent(name: string, baseUrl: string, apiToken: string): void {
+    this.remoteAgents.set(name.toLowerCase(), { name, baseUrl, apiToken, online: false });
+    logger.info(`Remote agent "${name}" registered`, { url: baseUrl });
+  }
+
+  unregisterRemoteAgent(name: string): void {
+    this.remoteAgents.delete(name.toLowerCase());
+    logger.info(`Remote agent "${name}" unregistered`);
+  }
+
+  getRemoteAgentNames(): string[] {
+    return [...this.remoteAgents.keys()];
+  }
+
+  getRemoteAgentConfig(name: string): RemoteAgent | undefined {
+    return this.remoteAgents.get(name.toLowerCase());
+  }
+
+  private async routeToRemote(msg: AgentMessage, remote: RemoteAgent): Promise<AgentMessage | null> {
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (remote.apiToken) headers['Authorization'] = `Bearer ${remote.apiToken}`;
+
+      const res = await fetch(`${remote.baseUrl}/api/bus/receive`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ message: msg }),
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      if (!res.ok) {
+        logger.warn(`Remote agent ${remote.name} returned ${res.status}`);
+        return null;
+      }
+
+      const data = await res.json() as { response: string };
+
+      const response: AgentMessage = {
+        id: randomUUID(),
+        from: msg.to,
+        to: msg.from,
+        type: 'response',
+        payload: data.response,
+        replyTo: msg.id,
+        timestamp: new Date().toISOString(),
+      };
+
+      try { saveBusMessage(response); } catch {}
+      this.history.push(response);
+      if (this.history.length > 100) this.history = this.history.slice(-100);
+      this.emit('message', response);
+      return response;
+    } catch (error) {
+      logger.error(`Failed to route to remote ${remote.name}`, { error: String(error) });
+      return null;
+    }
   }
 
   async send(message: Omit<AgentMessage, 'id' | 'timestamp'>): Promise<AgentMessage | null> {
@@ -116,15 +184,31 @@ export class AgentBus extends EventEmitter {
           );
         }
       }
+      // Also broadcast to remote agents
+      for (const [name, remote] of this.remoteAgents) {
+        if (name !== msg.from) {
+          this.routeToRemote(msg, remote).catch((err) =>
+            logger.error(`Remote broadcast to ${name} failed`, { error: String(err) })
+          );
+        }
+      }
+
       // Check subscriptions for the broadcast
       this.checkSubscriptions(msg);
       return null;
     }
 
-    // Direct message (case-insensitive lookup)
+    // Direct message (case-insensitive lookup — local first, then remote)
     const handler = this.handlers.get(msg.to) || this.handlers.get(msg.to.toLowerCase());
     if (!handler) {
-      logger.warn(`Agent "${msg.to}" not found on bus`, { registered: [...this.handlers.keys()] });
+      // Check remote agents
+      const remote = this.remoteAgents.get(msg.to) || this.remoteAgents.get(msg.to.toLowerCase());
+      if (remote) {
+        const response = await this.routeToRemote(msg, remote);
+        this.checkSubscriptions(msg);
+        return response;
+      }
+      logger.warn(`Agent "${msg.to}" not found on bus`, { registered: [...this.handlers.keys()], remote: [...this.remoteAgents.keys()] });
       return null;
     }
 

@@ -15,8 +15,11 @@ import yaml from 'js-yaml';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export interface AgentEntry {
-  root: string;
-  registered: string; // ISO timestamp
+  root?: string;           // local agent path
+  remoteUrl?: string;      // ngrok URL for remote agents
+  remoteToken?: string;    // API token for remote agents
+  registered: string;      // ISO timestamp
+  type?: 'local' | 'remote';  // defaults to 'local'
 }
 
 export interface Registry {
@@ -131,7 +134,7 @@ export function resolveAgentRoot(nameOrPath: string): string {
   if (!entry) {
     throw new Error(`Agent "${nameOrPath}" not found in registry. Run \`kyberbot fleet register\` first.`);
   }
-  return entry.root;
+  return entry.root || '';
 }
 
 export function isRegistered(name: string): boolean {
@@ -150,6 +153,7 @@ export function getNextAvailablePort(): number {
 
   for (const [, entry] of Object.entries(registry.agents)) {
     try {
+      if (!entry.root) continue; // skip remote agents
       const identityPath = join(entry.root, 'identity.yaml');
       if (existsSync(identityPath)) {
         const raw = readFileSync(identityPath, 'utf-8');
@@ -183,4 +187,46 @@ export function getAgentNameFromRoot(root: string): string {
   } catch {
     return 'unknown';
   }
+}
+
+/**
+ * Register a remote agent (accessed via ngrok tunnel URL).
+ */
+export async function registerRemoteAgent(name: string, url: string, token: string): Promise<void> {
+  const sanitizedName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+  if (!sanitizedName) throw new Error('Agent name cannot be empty');
+
+  // Validate by pinging the remote agent's health endpoint
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${url}/health`, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`Health check returned ${res.status}`);
+  } catch (error) {
+    throw new Error(`Cannot reach remote agent at ${url}: ${error instanceof Error ? error.message : error}`);
+  }
+
+  const registry = loadRegistry();
+  registry.agents[sanitizedName] = {
+    remoteUrl: url,
+    remoteToken: token,
+    registered: new Date().toISOString(),
+    type: 'remote',
+  };
+  saveRegistry(registry);
+}
+
+/**
+ * Get all remote agents from the registry.
+ */
+export function getRemoteAgents(): Record<string, AgentEntry> {
+  const registry = loadRegistry();
+  const remotes: Record<string, AgentEntry> = {};
+  for (const [name, entry] of Object.entries(registry.agents)) {
+    if (entry.type === 'remote') remotes[name] = entry;
+  }
+  return remotes;
 }

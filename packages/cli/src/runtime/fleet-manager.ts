@@ -55,6 +55,9 @@ export class FleetManager {
         throw new Error(`Agent "${name}" not found in registry.`);
       }
 
+      // Skip remote agents — they're handled separately
+      if (entry.type === 'remote' || !entry.root) continue;
+
       const identity = getIdentityForRoot(entry.root);
       const runtime = new AgentRuntime({
         root: entry.root,
@@ -65,6 +68,16 @@ export class FleetManager {
 
       this.agents.set(name, runtime);
       logger.info(`Loaded agent: ${name}`, { root: entry.root });
+    }
+
+    // Load remote agents into the bus
+    for (const [name, entry] of Object.entries(registry.agents)) {
+      if (entry.type === 'remote' && entry.remoteUrl) {
+        if (toLoad.includes(name) || !names) {
+          this.bus.registerRemoteAgent(name, entry.remoteUrl, entry.remoteToken || '');
+          logger.info(`Loaded remote agent: ${name}`, { url: entry.remoteUrl });
+        }
+      }
     }
   }
 
