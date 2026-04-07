@@ -65,4 +65,8 @@ export interface IdentityConfig {
   memory?: {
     entity_stoplist?: string[];
   };
+  subscriptions?: Array<{
+    from: string;
+    topic: string;
+  }>;
 }
