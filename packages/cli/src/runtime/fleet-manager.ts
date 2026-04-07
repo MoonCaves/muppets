@@ -23,6 +23,7 @@ export class FleetManager {
   private server: http.Server | null = null;
   private app: express.Express | null = null;
   private sleepScheduler: FleetSleepScheduler | null = null;
+  private tunnelHandle: { stop: () => Promise<void>; status: () => string } | null = null;
   private bus: AgentBus;
   private startedAt = 0;
 
@@ -134,7 +135,7 @@ export class FleetManager {
             { name: 'Heartbeat', status: s.services.heartbeat },
             { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
             { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
-            { name: 'Tunnel', status: 'disabled' },
+            { name: 'Tunnel', status: s.status === 'running' && this.agents.get(s.name)?.identity.tunnel?.enabled ? 'stopped' : 'disabled' },
           ],
           channels: s.services.channels,
         })),
