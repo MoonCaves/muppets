@@ -48,7 +48,8 @@ export function createWebApiRouter(root: string): Router {
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        res.status(404).json({ error: `Memory block '${block}' not found` });
+        // Return empty content instead of 404 — lets the UI show an editable (empty) block
+        res.json({ content: '', lastModified: '' });
         return;
       }
       logger.error(`Failed to read memory block '${block}'`, { error: String(err) });
