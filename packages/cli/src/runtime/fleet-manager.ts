@@ -129,8 +129,12 @@ export class FleetManager {
           status: s.status,
           uptime: `${Math.floor(s.uptime / 1000)}s`,
           services: [
+            { name: 'ChromaDB', status: s.services.embeddings === 'running' ? 'running' : 'disabled' },
+            { name: 'Server', status: s.status },
             { name: 'Heartbeat', status: s.services.heartbeat },
-            { name: 'Embeddings', status: s.services.embeddings },
+            { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
+            { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
+            { name: 'Tunnel', status: 'disabled' },
           ],
           channels: s.services.channels,
         })),
