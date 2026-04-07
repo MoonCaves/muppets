@@ -140,29 +140,46 @@ export class FleetManager {
 
       const statuses = this.getAllStatuses();
 
-      res.json({
-        mode: 'fleet',
-        agents: statuses.map(s => ({
-          name: s.name,
-          status: s.status,
-          uptime: `${Math.floor(s.uptime / 1000)}s`,
-          services: [
-            { name: 'ChromaDB', status: s.services.embeddings === 'running' ? 'running' : 'disabled' },
-            { name: 'Server', status: s.status },
-            { name: 'Heartbeat', status: s.services.heartbeat },
-            { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
-            { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
-            { name: 'Tunnel', status: this.tunnelHandles.has(s.name) ? 'running' : (this.agents.get(s.name)?.identity.tunnel?.enabled ? 'stopped' : 'disabled') },
+      // Include remote agents in fleet status
+      const remoteAgentStatuses = this.bus.getRemoteAgentNames().map(name => {
+          const config = this.bus.getRemoteAgentConfig(name);
+          return {
+            name,
+            status: config?.online ? 'running' : 'unreachable',
+            type: 'remote',
+            uptime: '',
+            services: [],
+            channels: [],
+            url: config?.baseUrl || '',
+          };
+        });
+
+        res.json({
+          mode: 'fleet',
+          agents: [
+            ...statuses.map(s => ({
+              name: s.name,
+              status: s.status,
+              uptime: `${Math.floor(s.uptime / 1000)}s`,
+              services: [
+                { name: 'ChromaDB', status: s.services.embeddings === 'running' ? 'running' : 'disabled' },
+                { name: 'Server', status: s.status },
+                { name: 'Heartbeat', status: s.services.heartbeat },
+                { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
+                { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
+                { name: 'Tunnel', status: this.tunnelHandles.has(s.name) ? 'running' : (this.agents.get(s.name)?.identity.tunnel?.enabled ? 'stopped' : 'disabled') },
+              ],
+              channels: s.services.channels,
+            })),
+            ...remoteAgentStatuses,
           ],
-          channels: s.services.channels,
-        })),
-        sleep: {
-          current_agent: this.sleepScheduler?.getCurrentAgent() || null,
-          last_run: null,
-        },
-        uptime: uptimeStr,
-        pid: process.pid,
-      });
+          sleep: {
+            current_agent: this.sleepScheduler?.getCurrentAgent() || null,
+            last_run: null,
+          },
+          uptime: uptimeStr,
+          pid: process.pid,
+        });
     });
 
     // Fleet management API
@@ -365,6 +382,29 @@ export class FleetManager {
     this.sleepScheduler.start().catch((err) =>
       logger.error('Sleep scheduler error', { error: String(err) })
     );
+
+    // Health-check remote agents every 30 seconds
+    if (this.bus.getRemoteAgentNames().length > 0) {
+      const checkRemoteHealth = async () => {
+        for (const name of this.bus.getRemoteAgentNames()) {
+          const config = this.bus.getRemoteAgentConfig(name);
+          if (!config) continue;
+          try {
+            const headers: Record<string, string> = { 'ngrok-skip-browser-warning': 'true' };
+            if (config.apiToken) headers['Authorization'] = `Bearer ${config.apiToken}`;
+            const res = await fetch(`${config.baseUrl}/health`, {
+              headers,
+              signal: AbortSignal.timeout(5000),
+            });
+            config.online = res.ok;
+          } catch {
+            config.online = false;
+          }
+        }
+      };
+      checkRemoteHealth();
+      setInterval(checkRemoteHealth, 30_000);
+    }
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {
