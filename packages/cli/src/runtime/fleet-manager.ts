@@ -330,6 +330,31 @@ export class FleetManager {
       break;
     }
 
+    // Register fleet connection with remote agents (so they can send bus messages back)
+    const fleetTunnelUrl = getTunnelUrl();
+    if (fleetTunnelUrl && this.bus.getRemoteAgentNames().length > 0) {
+      const firstLocalAgent = [...this.agents.values()][0];
+      const fleetToken = firstLocalAgent?.apiToken || '';
+
+      for (const remoteName of this.bus.getRemoteAgentNames()) {
+        const remote = this.bus.getRemoteAgentConfig(remoteName);
+        if (!remote) continue;
+        try {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (remote.apiToken) headers['Authorization'] = `Bearer ${remote.apiToken}`;
+          await fetch(`${remote.baseUrl}/api/bus/register-fleet`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ fleetUrl: fleetTunnelUrl, fleetToken }),
+            signal: AbortSignal.timeout(10_000),
+          });
+          logger.info(`Fleet registered with remote agent ${remoteName}`, { fleetUrl: fleetTunnelUrl });
+        } catch (error) {
+          logger.warn(`Failed to register fleet with ${remoteName}`, { error: String(error) });
+        }
+      }
+    }
+
     // Start sleep scheduler
     const sleepRoots = new Map<string, string>();
     for (const [name, agent] of this.agents) {
