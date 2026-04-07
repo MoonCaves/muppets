@@ -112,7 +112,7 @@ async function tick(root: string): Promise<void> {
       }
     }
 
-    const prompt = [
+    const promptParts = [
       'You are executing a heartbeat task. Follow these instructions exactly:',
       '',
       '1. Read the HEARTBEAT.md tasks below and the heartbeat-state.json timestamps.',
@@ -131,7 +131,31 @@ async function tick(root: string): Promise<void> {
       ...(skillSections.length > 0 ? skillSections : []),
       `Current time: ${new Date().toISOString()}`,
       `Timezone: ${getIdentityForRoot(root).timezone || Intl.DateTimeFormat().resolvedOptions().timeZone}`,
-    ].join('\n');
+    ];
+
+    // Fleet awareness — let heartbeat know about other agents
+    try {
+      const { getActiveBus } = await import('../runtime/agent-bus.js');
+      const { buildFleetAwarenessSection } = await import('../runtime/agent-runtime.js');
+      const bus = getActiveBus();
+      if (bus) {
+        const agentName = getIdentityForRoot(root).agent_name || 'KyberBot';
+        const fleetSection = buildFleetAwarenessSection(bus, agentName);
+        if (fleetSection) promptParts.push('', fleetSection);
+
+        // Pending notifications from other agents
+        const notifications = bus.getPendingNotifications(agentName);
+        if (notifications.length > 0) {
+          promptParts.push('', '## Pending Notifications from Other Agents', '');
+          for (const n of notifications) {
+            promptParts.push(`- **[${n.from}]** (${(n as any).topic || 'general'}): ${n.payload.slice(0, 200)}`);
+          }
+          promptParts.push('', 'Review these and take action if relevant.');
+        }
+      }
+    } catch { /* not in fleet mode */ }
+
+    const prompt = promptParts.join('\n');
 
     const client = getClaudeClient();
     const result = await client.complete(prompt, {

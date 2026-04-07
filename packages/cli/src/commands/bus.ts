@@ -265,5 +265,114 @@ export function createBusCommand(): Command {
       }
     });
 
+  // ─────────────────────────────────────────────────────────────
+  // bus subscribe <from> <topic>
+  // ─────────────────────────────────────────────────────────────
+  bus
+    .command('subscribe')
+    .description('Subscribe to messages from an agent on a topic')
+    .argument('<from>', 'Agent name to subscribe to (or "*" for all)')
+    .argument('<topic>', 'Topic to subscribe to')
+    .action(async (from: string, topic: string) => {
+      // Update identity.yaml
+      try {
+        const { getRoot } = await import('../config.js');
+        const { readFileSync, writeFileSync } = await import('fs');
+        const { join } = await import('path');
+        const yaml = (await import('js-yaml')).default;
+
+        const root = getRoot();
+        const identityPath = join(root, 'identity.yaml');
+        const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, unknown>;
+
+        if (!identity.subscriptions) identity.subscriptions = [];
+        const subs = identity.subscriptions as Array<{ from: string; topic: string }>;
+
+        // Check for duplicate
+        if (subs.some(s => s.from === from && s.topic === topic)) {
+          console.log(DIM(`Already subscribed to ${topic} from ${from}`));
+          return;
+        }
+
+        subs.push({ from, topic });
+        writeFileSync(identityPath, yaml.dump(identity, { lineWidth: 120 }), 'utf-8');
+        console.log(PRIMARY(`Subscribed to "${topic}" from ${from}`));
+        console.log(DIM('Takes effect on next agent start or fleet restart'));
+      } catch (error) {
+        console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+      }
+    });
+
+  // ─────────────────────────────────────────────────────────────
+  // bus unsubscribe <from> <topic>
+  // ─────────────────────────────────────────────────────────────
+  bus
+    .command('unsubscribe')
+    .description('Remove a topic subscription')
+    .argument('<from>', 'Agent name')
+    .argument('<topic>', 'Topic')
+    .action(async (from: string, topic: string) => {
+      try {
+        const { getRoot } = await import('../config.js');
+        const { readFileSync, writeFileSync } = await import('fs');
+        const { join } = await import('path');
+        const yaml = (await import('js-yaml')).default;
+
+        const root = getRoot();
+        const identityPath = join(root, 'identity.yaml');
+        const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, unknown>;
+
+        if (!identity.subscriptions) {
+          console.log(DIM('No subscriptions found'));
+          return;
+        }
+
+        const subs = identity.subscriptions as Array<{ from: string; topic: string }>;
+        identity.subscriptions = subs.filter(s => !(s.from === from && s.topic === topic));
+        writeFileSync(identityPath, yaml.dump(identity, { lineWidth: 120 }), 'utf-8');
+        console.log(PRIMARY(`Unsubscribed from "${topic}" from ${from}`));
+      } catch (error) {
+        console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+      }
+    });
+
+  // ─────────────────────────────────────────────────────────────
+  // bus subscriptions
+  // ─────────────────────────────────────────────────────────────
+  bus
+    .command('subscriptions')
+    .description('List active topic subscriptions')
+    .action(async () => {
+      try {
+        const { getRoot } = await import('../config.js');
+        const { readFileSync } = await import('fs');
+        const { join } = await import('path');
+        const yaml = (await import('js-yaml')).default;
+
+        const root = getRoot();
+        const identityPath = join(root, 'identity.yaml');
+        const identity = yaml.load(readFileSync(identityPath, 'utf-8')) as Record<string, unknown>;
+        const subs = (identity.subscriptions || []) as Array<{ from: string; topic: string }>;
+
+        if (subs.length === 0) {
+          console.log(DIM('No subscriptions configured'));
+          return;
+        }
+
+        console.log();
+        console.log(PRIMARY.bold('  Topic Subscriptions'));
+        console.log();
+        for (const sub of subs) {
+          console.log(`  ${ACCENT(sub.from)} → ${sub.topic}`);
+        }
+        console.log();
+      } catch (error) {
+        console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+      }
+    });
+
   return bus;
 }

@@ -11,7 +11,7 @@ import { createLogger } from '../logger.js';
 import { getIdentityForRoot } from '../config.js';
 import { loadRegistry } from '../registry.js';
 import { AgentRuntime, AgentRuntimeStatus } from './agent-runtime.js';
-import { AgentBus } from './agent-bus.js';
+import { AgentBus, setActiveBus } from './agent-bus.js';
 import { FleetSleepScheduler } from './fleet-sleep-scheduler.js';
 import { createFleetAuthMiddleware } from './fleet-auth.js';
 import { getMetrics, errorMiddleware } from '../monitoring.js';
@@ -32,6 +32,7 @@ export class FleetManager {
 
   constructor() {
     this.bus = new AgentBus();
+    setActiveBus(this.bus);
   }
 
   /**
@@ -377,6 +378,7 @@ export class FleetManager {
       this.server = null;
     }
 
+    setActiveBus(null);
     logger.info('Fleet stopped');
   }
 

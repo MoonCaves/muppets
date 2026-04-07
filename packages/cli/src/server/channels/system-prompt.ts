@@ -20,6 +20,15 @@ import { createLogger } from '../../logger.js';
 
 const logger = createLogger('system-prompt');
 
+// Fleet awareness — set by AgentRuntime when running in fleet mode
+let _fleetAwareness = '';
+let _pendingNotificationsGetter: ((agentName: string) => Array<{ from: string; topic?: string; payload: string }>) | null = null;
+
+export function setFleetAwareness(section: string): void { _fleetAwareness = section; }
+export function setPendingNotificationsGetter(getter: (agentName: string) => Array<{ from: string; topic?: string; payload: string }>): void {
+  _pendingNotificationsGetter = getter;
+}
+
 /**
  * Build system prompt for a messaging channel.
  * Includes: identity, personality, user context, operational knowledge,
@@ -158,6 +167,25 @@ export async function buildChannelSystemPrompt(channel: 'telegram' | 'whatsapp' 
     }
   } catch (err) {
     logger.debug('Failed to load agents for channel prompt', { error: String(err) });
+  }
+
+  // Fleet awareness — other running agents and bus commands
+  if (_fleetAwareness) {
+    parts.push(_fleetAwareness);
+  }
+
+  // Pending notifications from other agents (via topic subscriptions)
+  if (_pendingNotificationsGetter) {
+    try {
+      const notifications = _pendingNotificationsGetter(agentName);
+      if (notifications.length > 0) {
+        parts.push('\n## Pending Notifications from Other Agents\n');
+        for (const n of notifications) {
+          parts.push(`- **[${n.from}]** (${n.topic || 'general'}): ${n.payload.slice(0, 200)}`);
+        }
+        parts.push('\nReview these and take action if relevant to the current conversation.\n');
+      }
+    } catch {}
   }
 
   // Load recent cross-channel activity for continuity between sessions

@@ -146,6 +146,21 @@ export class AgentRuntime {
       });
     }
 
+    // Load topic subscriptions from identity.yaml
+    if (this.bus && this.identity.subscriptions) {
+      for (const sub of this.identity.subscriptions) {
+        this.bus.subscribe(this.name, sub.from, sub.topic);
+      }
+    }
+
+    // Set fleet awareness in channel system prompts
+    if (this.bus) {
+      try {
+        const { setFleetAwareness } = await import('../server/channels/system-prompt.js');
+        setFleetAwareness(buildFleetAwarenessSection(this.bus, this.name));
+      } catch { /* system-prompt not available */ }
+    }
+
     this._status = 'running';
     logger.info(`Agent ${this.name} started`, {
       heartbeat: this.heartbeat ? 'running' : 'disabled',
@@ -304,11 +319,33 @@ export class AgentRuntime {
  * Build a system prompt section that makes an agent aware of other running agents.
  * Can be injected into prompt building to enable inter-agent coordination.
  */
-export function buildFleetAwarenessSection(bus: AgentBus, currentAgent: string): string {
+export function buildFleetAwarenessSection(
+  bus: AgentBus,
+  currentAgent: string,
+  agentDescriptions?: Map<string, string>
+): string {
   const others = bus.getRegisteredAgents().filter(n => n !== currentAgent);
   if (others.length === 0) return '';
 
-  return `\n## Other Agents\n\nAgents running alongside you: ${others.join(', ')}.\n` +
-    `To send a message: \`kyberbot bus send <agent> "<message>"\`\n` +
-    `To broadcast: \`kyberbot bus broadcast "<message>"\`\n`;
+  const lines: string[] = ['\n## Fleet — Other Running Agents\n'];
+  lines.push('You are part of a multi-agent fleet. These agents are running alongside you:\n');
+
+  for (const name of others) {
+    const desc = agentDescriptions?.get(name);
+    lines.push(`- **${name}**${desc ? ` — ${desc}` : ''}`);
+  }
+
+  lines.push('\nYou can communicate with them:');
+  lines.push('- `kyberbot bus send <agent> "<message>"` — Ask a specific agent');
+  lines.push('- `kyberbot bus broadcast "<message>"` — Notify all agents');
+  lines.push('');
+  lines.push('Use inter-agent communication when:');
+  lines.push('- You need expertise from another agent\'s domain');
+  lines.push('- You discover something relevant to another agent\'s responsibilities');
+  lines.push('- An incident or issue affects multiple domains');
+  lines.push('- You want a second opinion on a decision');
+  lines.push('');
+  lines.push('Do NOT message other agents for trivial matters or routine operations.');
+
+  return lines.join('\n');
 }
