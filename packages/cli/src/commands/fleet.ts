@@ -208,30 +208,73 @@ export function createFleetCommand(): Command {
       const port = options.port ? parseInt(options.port) : 3456;
       const names = options.only?.split(',').map((n) => n.trim().toLowerCase());
 
+      const { displayBanner } = await import('../splash.js');
+      const { getIdentityForRoot } = await import('../config.js');
+      const { getTunnelUrl } = await import('../services/tunnel.js');
+
+      console.clear();
       console.log();
-      console.log(PRIMARY.bold('  Starting KyberBot Fleet...'));
+      displayBanner();
+
+      // Fleet metadata
+      const agentNames = names || Object.keys((await import('../registry.js')).loadRegistry().agents);
+      console.log(DIM('  Mode:    ') + ACCENT('Fleet'));
+      console.log(DIM('  Agents:  ') + chalk.white(agentNames.join(', ')));
+      console.log(DIM('  Port:    ') + chalk.white(String(port)));
       console.log();
 
       const fleet = new FleetManager();
       await fleet.loadAgents(names);
       await fleet.start(port);
 
+      // Per-agent status breakdown
       const statuses = fleet.getAllStatuses();
+      console.log();
       for (const status of statuses) {
-        const icon = status.status === 'running' ? chalk.green('●') : chalk.red('●');
+        const agentIdentity = (() => {
+          try { return getIdentityForRoot(status.root); } catch { return null; }
+        })();
+        const agentPort = agentIdentity?.server?.port || port;
+        const agentToken = (() => {
+          try {
+            const { readFileSync } = require('fs');
+            const { join } = require('path');
+            const env = readFileSync(join(status.root, '.env'), 'utf-8');
+            const match = env.match(/KYBERBOT_API_TOKEN=(.+)/);
+            return match ? match[1].trim().replace(/['"]/g, '') : null;
+          } catch { return null; }
+        })();
+
+        const icon = status.status === 'running' ? chalk.green('✓') : chalk.red('✗');
         const channels = status.services.channels.map(c => c.name).join(', ') || 'none';
-        console.log(`  ${icon} ${ACCENT(status.name.padEnd(14))} heartbeat: ${status.services.heartbeat}, channels: ${channels}`);
+
+        console.log(`  ${icon} ${ACCENT(status.name.toUpperCase())}`);
+        console.log(`    ${DIM('Status:')}    ${status.status === 'running' ? chalk.green('running') : chalk.red(status.status)}`);
+        console.log(`    ${DIM('Heartbeat:')} ${status.services.heartbeat}`);
+        console.log(`    ${DIM('Channels:')}  ${channels}`);
+        console.log(`    ${DIM('Local:')}     http://localhost:${agentPort}`);
+        if (agentToken) {
+          console.log(`    ${DIM('API Key:')}   ${agentToken}`);
+        }
+        console.log();
       }
 
+      // Fleet connection info
+      const tunnelUrl = getTunnelUrl();
+      console.log(DIM('═'.repeat(76)));
       console.log();
-      console.log(DIM(`  Fleet server: http://localhost:${port}`));
-      if (statuses.length === 1) {
-        console.log(DIM(`  Routes: http://localhost:${port}/health (single-agent compat)`));
-      } else {
-        for (const s of statuses) {
-          console.log(DIM(`  Routes: http://localhost:${port}/agent/${s.name}/*`));
-        }
+      console.log('  ' + PRIMARY.bold('Fleet is ready.'));
+      console.log();
+      console.log(DIM('═'.repeat(76)));
+      console.log();
+      console.log(`  ${DIM('Fleet server:')} http://localhost:${port}`);
+      if (tunnelUrl) {
+        console.log(`  ${DIM('Tunnel:')}       ${ACCENT(tunnelUrl)}`);
       }
+      for (const s of statuses) {
+        console.log(`  ${DIM('Routes:')}       http://localhost:${port}/agent/${s.name}/*`);
+      }
+      console.log(`  ${DIM('Bus:')}          http://localhost:${port}/fleet/bus/*`);
       console.log();
 
       // Keep process alive
