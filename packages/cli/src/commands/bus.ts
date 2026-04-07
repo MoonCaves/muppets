@@ -49,15 +49,32 @@ async function fleetFetch(
 ): Promise<Response> {
   const port = getFleetPort();
   const token = getApiToken();
-  const url = `http://localhost:${port}${path}`;
+
+  // Try local fleet first, then fall back to registered fleet connection (remote → local)
+  let url = `http://localhost:${port}${path}`;
+  let useToken = token;
+  try {
+    const { getFleetConnection } = await import('../server/bus-api.js');
+    const conn = getFleetConnection();
+    if (conn) {
+      // We have a registered fleet connection — try it if local fails
+      try {
+        const localRes = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        if (!localRes.ok) throw new Error('local failed');
+      } catch {
+        url = `${conn.url}${path}`;
+        useToken = conn.token || token;
+      }
+    }
+  } catch { /* bus-api not loaded, use local */ }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  if (useToken) {
+    headers['Authorization'] = `Bearer ${useToken}`;
   }
 
   const controller = new AbortController();
