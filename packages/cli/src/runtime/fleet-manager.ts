@@ -23,7 +23,7 @@ export class FleetManager {
   private server: http.Server | null = null;
   private app: express.Express | null = null;
   private sleepScheduler: FleetSleepScheduler | null = null;
-  private tunnelHandle: { stop: () => Promise<void>; status: () => string } | null = null;
+  private agentServers: http.Server[] = [];
   private bus: AgentBus;
   private startedAt = 0;
 
@@ -245,6 +245,55 @@ export class FleetManager {
       });
     });
 
+    // Start per-agent port listeners (so existing tunnel URLs keep working)
+    for (const [name, agent] of this.agents) {
+      const agentPort = agent.identity.server?.port;
+      if (!agentPort || agentPort === port) continue; // skip if same as fleet port
+
+      try {
+        const agentApp = express();
+        agentApp.use(express.json());
+
+        // Public health endpoint (no auth — matches single-agent behavior)
+        agentApp.get('/health', (_req, res) => {
+          const s = agent.getStatus();
+          res.json({
+            status: s.status === 'running' ? 'ok' : 'degraded',
+            timestamp: new Date().toISOString(),
+            uptime: `${Math.floor(s.uptime / 1000)}s`,
+            channels: s.services.channels,
+            services: [
+              { name: 'ChromaDB', status: s.services.embeddings === 'running' ? 'running' : 'disabled' },
+              { name: 'Server', status: s.status },
+              { name: 'Heartbeat', status: s.services.heartbeat },
+              { name: 'Sleep Agent', status: this.sleepScheduler?.isRunning() ? 'running' : 'disabled' },
+              { name: 'Channels', status: s.services.channels.length > 0 ? 'running' : 'disabled' },
+              { name: 'Tunnel', status: agent.identity.tunnel?.enabled ? 'stopped' : 'disabled' },
+            ],
+            errors: 0,
+            memory: {},
+            pid: process.pid,
+            node_version: process.version,
+          });
+        });
+
+        // Single-agent auth for this port
+        const singleAuth = createFleetAuthMiddleware(
+          new Map([[name, { root: agent.root, apiToken: agent.apiToken }]])
+        );
+        agentApp.use('/', singleAuth, agent.createRouter());
+        agentApp.use(errorMiddleware);
+
+        const agentServer = http.createServer(agentApp);
+        agentServer.listen(agentPort, () => {
+          logger.info(`Agent ${name} also listening on port ${agentPort}`);
+        });
+        this.agentServers.push(agentServer);
+      } catch (error) {
+        logger.warn(`Could not bind agent ${name} to port ${agentPort}`, { error: String(error) });
+      }
+    }
+
     // Start sleep scheduler
     const sleepRoots = new Map<string, string>();
     for (const [name, agent] of this.agents) {
@@ -286,7 +335,15 @@ export class FleetManager {
       }
     }
 
-    // Stop server
+    // Stop per-agent servers
+    for (const agentServer of this.agentServers) {
+      await new Promise<void>((resolve) => {
+        agentServer.close(() => resolve());
+      });
+    }
+    this.agentServers = [];
+
+    // Stop fleet server
     if (this.server) {
       await new Promise<void>((resolve, reject) => {
         this.server!.close((err) => (err ? reject(err) : resolve()));
