@@ -151,7 +151,9 @@ export class Database {
 
     if (existsSync(filePath)) {
       const buffer = readFileSync(filePath);
-      this.db = new SQL.Database(buffer);
+      // CRITICAL: Node.js Buffer may share a pooled ArrayBuffer with other Buffers.
+      // sql.js reads the raw ArrayBuffer, so we must copy to a fresh Uint8Array.
+      this.db = new SQL.Database(new Uint8Array(buffer));
     } else {
       this.db = new SQL.Database();
     }
