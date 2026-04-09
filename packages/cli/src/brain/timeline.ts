@@ -8,6 +8,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { openWithRecovery } from './db-recovery.js';
 import { join } from 'path';
 import { mkdir } from 'fs/promises';
 import { createLogger } from '../logger.js';
@@ -85,7 +86,7 @@ async function ensureDatabase(root: string): Promise<Database.Database> {
   await mkdir(dataDir, { recursive: true });
 
   const newDbPath = join(dataDir, 'timeline.db');
-  const newDb = new Database(newDbPath);
+  const newDb = openWithRecovery(newDbPath);
 
   newDb.pragma('journal_mode = WAL');
 

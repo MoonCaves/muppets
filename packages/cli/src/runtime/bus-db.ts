@@ -8,6 +8,7 @@
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { homedir } from 'os';
+import { openWithRecovery } from '../brain/db-recovery.js';
 import { mkdirSync, existsSync } from 'fs';
 import { createLogger } from '../logger.js';
 import type { AgentMessage } from './agent-bus.js';
@@ -38,7 +39,7 @@ export function getBusDb(): Database.Database {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   const dbPath = join(dir, 'bus.db');
-  db = new Database(dbPath);
+  db = openWithRecovery(dbPath);
   db.pragma('journal_mode = WAL');
 
   db.exec(`

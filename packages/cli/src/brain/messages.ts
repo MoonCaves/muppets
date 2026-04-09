@@ -10,6 +10,7 @@ import Database from 'better-sqlite3';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../logger.js';
+import { openWithRecovery } from './db-recovery.js';
 
 const logger = createLogger('messages');
 
@@ -42,7 +43,7 @@ function ensureDatabase(root: string): Database.Database {
   mkdirSync(dataDir, { recursive: true });
 
   const newDbPath = join(dataDir, 'messages.db');
-  const newDb = new Database(newDbPath);
+  const newDb = openWithRecovery(newDbPath);
   newDb.pragma('journal_mode = WAL');
 
   newDb.exec(`
