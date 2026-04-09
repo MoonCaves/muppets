@@ -221,6 +221,8 @@ async function storeConversationImpl(
   const timestamp = input.timestamp || new Date().toISOString();
   const sourcePath = `channel://${input.channel}/${conversationId}`;
   const fullText = `User: ${input.prompt}\n\nAssistant: ${input.response}`;
+  // Clean summary for timeline — no role prefixes, just the content
+  const timelineSummary = input.response.slice(0, 2000);
   const sourceType = channelToSourceType(input.channel);
   const sourceConfidence = SOURCE_CONFIDENCE[sourceType] ?? 0.85;
 
@@ -304,7 +306,7 @@ async function storeConversationImpl(
         await addConversationToTimeline(
           root, conversationId, sourcePath, timestamp, undefined,
           fullTitle,
-          fullText.slice(0, 2000), // Parent entry gets first 2000 chars; segments have full text
+          timelineSummary,
           entityNames, topicNames
         );
       }
@@ -312,7 +314,7 @@ async function storeConversationImpl(
       await addConversationToTimeline(
         root, conversationId, sourcePath, timestamp, undefined,
         fullTitle,
-        fullText.slice(0, 2000), // Parent entry gets first 2000 chars; segments have full text
+        timelineSummary,
         entityNames, topicNames
       );
     }
@@ -323,28 +325,20 @@ async function storeConversationImpl(
   }
 
   logger.info('storeConversation:segments:before', { heapMB: heapMB() });
-  // ── Step 2b: Segment-level indexing for fine-grained retrieval ────────
-  // Serialization queue prevents concurrent OOM — safe to index here.
+  // ── Step 2b: Segment-level indexing — ChromaDB ONLY ──────────────────
+  // Segments go into ChromaDB for fine-grained semantic search.
+  // They do NOT go into the timeline — the timeline gets one clean entry
+  // per conversation (Step 2 above). Putting segments in the timeline
+  // pollutes it with mid-word fragments.
   {
     try {
-      const segments = segmentText(fullText, 250, 50);
-      if (segments.length > 1) {
-        for (const seg of segments) {
-          const segPath = `${sourcePath}/seg_${seg.index}`;
-          const segId = `${conversationId}_seg_${seg.index}`;
+      if (isChromaAvailable()) {
+        const segments = segmentText(fullText, 250, 50);
+        if (segments.length > 1) {
+          for (const seg of segments) {
+            const segPath = `${sourcePath}/seg_${seg.index}`;
+            const segId = `${conversationId}_seg_${seg.index}`;
 
-          // Store segment in timeline (for FTS)
-          try {
-            await addConversationToTimeline(
-              root, segId, segPath, timestamp, undefined,
-              fullTitle, seg.text, entityNames, topicNames
-            );
-          } catch {
-            // Segment storage is best-effort
-          }
-
-          // Store segment in ChromaDB (for semantic search)
-          if (isChromaAvailable()) {
             try {
               await indexDocument(root, segId, seg.text, {
                 type: 'conversation',
@@ -359,11 +353,11 @@ async function storeConversationImpl(
               // Segment embedding is best-effort
             }
           }
+          logger.debug('Stored conversation segments in ChromaDB', {
+            conversationId,
+            segments: segments.length,
+          });
         }
-        logger.debug('Stored conversation segments', {
-          conversationId,
-          segments: segments.length,
-        });
       }
     } catch (err) {
       logger.warn('Segment storage failed', { error: String(err) });
