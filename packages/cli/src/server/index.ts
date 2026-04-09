@@ -86,7 +86,16 @@ export async function startServer(options: {
 
   const server = http.createServer(app);
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    server.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        logger.error(`Port ${port} is already in use. Another agent or process is running on this port.`);
+        reject(new Error(`Port ${port} is already in use. Stop the other agent first, or change server.port in identity.yaml.`));
+      } else {
+        reject(error);
+      }
+    });
+
     server.listen(port, () => {
       logger.info(`Server listening on port ${port}`);
 
