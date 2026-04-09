@@ -11,7 +11,7 @@ import express from 'express';
 import { createLogger } from '../logger.js';
 import { getServerPort, getIdentity, getRoot } from '../config.js';
 import { authMiddleware, getApiToken } from '../middleware/auth.js';
-import { createAgentRouter } from './agent-router.js';
+import { createAgentRouter, mountWebUi } from './agent-router.js';
 import { ServiceHandle } from '../types.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
@@ -53,6 +53,9 @@ export async function startServer(options: {
       node_version: metrics.node_version,
     });
   });
+
+  // Serve web UI static files BEFORE auth (browsers don't send Bearer tokens on page loads)
+  mountWebUi(app, '');
 
   // Mount all agent routes via shared agent-router (authenticated)
   app.use('/', authMiddleware, createAgentRouter(root, channels));

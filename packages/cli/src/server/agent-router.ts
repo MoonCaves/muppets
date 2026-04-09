@@ -6,6 +6,7 @@
  */
 
 import express, { Router } from 'express';
+import type { Express } from 'express';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -21,8 +22,37 @@ import { createLogger } from '../logger.js';
 const logger = createLogger('agent-router');
 
 /**
+ * Mount web UI static files on an Express app or router.
+ * Call BEFORE auth middleware so browsers can load the page without a token.
+ * @param app Express app or router to mount on
+ * @param prefix URL prefix ('' for root, '/agent/name' for fleet)
+ */
+export function mountWebUi(app: { use: (...args: any[]) => any; get: (...args: any[]) => any }, prefix: string): void {
+  try {
+    const webDistPaths = [
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'web', 'dist'),
+      join(process.cwd(), 'node_modules', '@kyberbot', 'web', 'dist'),
+    ];
+
+    for (const distPath of webDistPaths) {
+      if (existsSync(join(distPath, 'index.html'))) {
+        app.use(`${prefix}/ui`, express.static(distPath));
+        app.get(`${prefix}/ui/*`, (_req: any, res: any) => {
+          res.sendFile(join(distPath, 'index.html'));
+        });
+        logger.debug(`Web UI available at ${prefix || '/'}/ui`);
+        break;
+      }
+    }
+  } catch (err) {
+    logger.debug('Web UI not available', { error: String(err) });
+  }
+}
+
+/**
  * Create an Express router with all agent-specific routes.
  * Every route within this router operates in the context of the given root.
+ * NOTE: Web UI is NOT included here — mount it separately before auth.
  */
 export function createAgentRouter(root: string, channels: Channel[]): Router {
   const router = Router();
@@ -44,27 +74,6 @@ export function createAgentRouter(root: string, channels: Channel[]): Router {
 
   // Management API
   router.use('/api/web/manage', createManagementRouter(channels, root));
-
-  // Serve web UI static files
-  try {
-    const webDistPaths = [
-      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'web', 'dist'),
-      join(process.cwd(), 'node_modules', '@kyberbot', 'web', 'dist'),
-    ];
-
-    for (const distPath of webDistPaths) {
-      if (existsSync(join(distPath, 'index.html'))) {
-        router.use('/ui', express.static(distPath));
-        router.get('/ui/*', (_req, res) => {
-          res.sendFile(join(distPath, 'index.html'));
-        });
-        logger.debug(`Web UI available from ${distPath}`);
-        break;
-      }
-    }
-  } catch (err) {
-    logger.debug('Web UI not available', { error: String(err) });
-  }
 
   return router;
 }

@@ -17,6 +17,7 @@ import { createFleetAuthMiddleware } from './fleet-auth.js';
 import { getMetrics, errorMiddleware } from '../monitoring.js';
 import { startTunnel, getTunnelUrl } from '../services/tunnel.js';
 import { ServiceHandle } from '../types.js';
+import { mountWebUi } from '../server/agent-router.js';
 
 const logger = createLogger('fleet');
 
@@ -246,6 +247,12 @@ export class FleetManager {
       res.json({ messages: history });
     });
 
+    // Mount web UI BEFORE auth — browsers don't send Bearer tokens on page loads
+    mountWebUi(this.app, ''); // root UI
+    for (const [name] of this.agents) {
+      mountWebUi(this.app, `/agent/${name}`); // per-agent UI
+    }
+
     // Per-agent routes with auth
     const fleetAuth = createFleetAuthMiddleware(authMap);
 
@@ -312,6 +319,9 @@ export class FleetManager {
             node_version: process.version,
           });
         });
+
+        // Web UI before auth
+        mountWebUi(agentApp, '');
 
         // Single-agent auth for this port
         const singleAuth = createFleetAuthMiddleware(
