@@ -40,7 +40,12 @@ export async function startService(name: string): Promise<boolean> {
 
   try {
     service.logger.info('Starting...');
-    service.handle = await service.config.start();
+    // Timeout after 30 seconds to catch hung startups (e.g., port in use with no error handler)
+    const startPromise = service.config.start();
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${name} startup timed out after 30 seconds`)), 30_000)
+    );
+    service.handle = await Promise.race([startPromise, timeoutPromise]);
     service.logger.info('Started successfully');
     return true;
   } catch (error) {
