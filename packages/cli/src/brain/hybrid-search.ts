@@ -720,7 +720,7 @@ function addRelatedMemories(
   results: HybridSearchResult[],
   root: string
 ): HybridSearchResult[] {
-  let sleep: import('../database.js').Database;
+  let sleep: import('better-sqlite3').Database;
   try {
     sleep = getSleepDb(root);
   } catch {
