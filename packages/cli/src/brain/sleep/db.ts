@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 import { createLogger } from '../../logger.js';
+import { openWithRecovery } from '../db-recovery.js';
 
 const logger = createLogger('sleep-db');
 
@@ -41,7 +42,7 @@ export function getSleepDb(root: string): Database.Database {
   mkdirSync(dataDir, { recursive: true });
 
   const dbPath = join(dataDir, 'sleep.db');
-  const newDb = new Database(dbPath);
+  const newDb = openWithRecovery(dbPath);
 
   newDb.pragma('journal_mode = WAL');
 
