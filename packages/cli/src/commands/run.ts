@@ -191,9 +191,16 @@ export function createRunCommand(): Command {
         // Service 5: Channels
         // ─────────────────────────────────────────────────────────────
 
+        // Only show Channels as enabled if channels are actually configured
+        const channelsIdentity = getIdentity();
+        const hasChannels = options.channels && !!(
+          channelsIdentity.channels?.telegram?.bot_token ||
+          channelsIdentity.channels?.whatsapp?.enabled
+        );
+
         registerService({
           name: 'Channels',
-          enabled: options.channels,
+          enabled: hasChannels,
           start: async () => {
             // Channels are initialized as part of the server startup.
             // This entry exists for visibility in the service dashboard.
