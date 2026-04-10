@@ -105,8 +105,14 @@ export function getServerPort(): number {
  */
 export function getClaudeMode(): 'agent-sdk' | 'sdk' {
   if (process.env.ANTHROPIC_API_KEY) return 'sdk';
-  const configMode = getIdentity().claude?.mode || 'subscription';
-  return configMode === 'subscription' ? 'agent-sdk' : 'sdk';
+  try {
+    const configMode = getIdentity().claude?.mode || 'subscription';
+    return configMode === 'subscription' ? 'agent-sdk' : 'sdk';
+  } catch {
+    // Fleet mode: getRoot() fails when cwd is the monorepo, not an agent dir.
+    // Default to subscription (agent-sdk) — the universal default.
+    return 'agent-sdk';
+  }
 }
 
 /**
@@ -121,7 +127,11 @@ export function getKybernesisApiKey(): string | null {
  * Get preferred Claude model
  */
 export function getClaudeModel(): string {
-  return getIdentity().claude?.model || 'opus';
+  try {
+    return getIdentity().claude?.model || 'opus';
+  } catch {
+    return 'opus';
+  }
 }
 
 /**
