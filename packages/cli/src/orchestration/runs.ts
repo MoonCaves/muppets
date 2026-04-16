@@ -8,6 +8,7 @@
  */
 
 import { getOrchDb } from './db.js';
+import { logActivity } from './activity.js';
 import { join } from 'path';
 import { homedir } from 'os';
 import { mkdirSync, existsSync, appendFileSync, readFileSync, statSync } from 'fs';
@@ -44,7 +45,16 @@ export function createRun(agentName: string, type: HeartbeatRunType): number {
   // Create empty log file
   appendFileSync(logRef, '');
 
-  return Number(result.lastInsertRowid);
+  const id = Number(result.lastInsertRowid);
+  logActivity({
+    actor: agentName,
+    action: `heartbeat.started`,
+    entity_type: 'run',
+    entity_id: String(id),
+    details: JSON.stringify({ type }),
+  });
+
+  return id;
 }
 
 /**
@@ -100,6 +110,14 @@ export function completeRun(
     id,
   );
 
+  logActivity({
+    actor: getRun(id)?.agent_name || 'unknown',
+    action: 'heartbeat.completed',
+    entity_type: 'run',
+    entity_id: String(id),
+    details: data.result_summary ? JSON.stringify({ preview: data.result_summary.slice(0, 100) }) : null,
+  });
+
   // Also write full output to log file for streaming reads
   if (data.log_output) {
     const run = getRun(id);
@@ -121,6 +139,14 @@ export function failRun(id: number, error: string): void {
         error = ?
     WHERE id = ?
   `).run(error, id);
+
+  logActivity({
+    actor: getRun(id)?.agent_name || 'unknown',
+    action: 'heartbeat.failed',
+    entity_type: 'run',
+    entity_id: String(id),
+    details: JSON.stringify({ error: error.slice(0, 200) }),
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
