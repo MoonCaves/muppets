@@ -25,6 +25,17 @@ let intervalId: NodeJS.Timeout | null = null;
 let running = false;
 let busy = false;
 
+// Orchestration runs on its own interval, separate from the standard heartbeat.
+// This tracks when the last orchestration tick ran per agent.
+const lastOrchTick = new Map<string, number>();
+
+function parseIntervalMs(intervalStr: string): number {
+  const match = intervalStr.match(/^(\d+)(m|h)$/);
+  return match
+    ? (match[2] === 'h' ? Number(match[1]) * 60 * 60 * 1000 : Number(match[1]) * 60 * 1000)
+    : 30 * 60 * 1000;
+}
+
 export function markBusy(isBusy: boolean): void {
   busy = isBusy;
 }
@@ -32,11 +43,7 @@ export function markBusy(isBusy: boolean): void {
 export async function startHeartbeat(root: string): Promise<ServiceHandle> {
   const identity = getIdentityForRoot(root);
   const intervalStr = identity.heartbeat_interval || '30m';
-  // Parse: '30m' → 30*60*1000, '1h' → 60*60*1000
-  const match = intervalStr.match(/^(\d+)(m|h)$/);
-  const intervalMs = match
-    ? (match[2] === 'h' ? Number(match[1]) * 60 * 60 * 1000 : Number(match[1]) * 60 * 1000)
-    : 30 * 60 * 1000;
+  const intervalMs = parseIntervalMs(intervalStr);
   logger.info(`Heartbeat interval: ${intervalMs / 1000 / 60} minutes`);
 
   running = true;
@@ -74,9 +81,8 @@ async function tick(root: string): Promise<void> {
   }
 
   // ── Orchestration heartbeat ─────────────────────────────────────
-  // Every agent checks for orchestration work on every tick:
-  // - CEO: runs the full orchestration loop (review state, assign work, etc.)
-  // - Workers: check for assigned todo/in_progress issues and execute them
+  // CEO and workers run on the orchestration interval (from settings),
+  // which may differ from the standard heartbeat interval (from identity.yaml).
   try {
     const { getCeoAgent, getOrgNode, getOrchestrationSettings, listIssues } = await import('../orchestration/index.js');
     const { runCeoHeartbeat } = await import('../orchestration/ceo-heartbeat.js');
@@ -86,22 +92,31 @@ async function tick(root: string): Promise<void> {
     if (settings.orchestration_enabled) {
       const identity = getIdentityForRoot(root);
       const agentName = identity.agent_name;
-      const ceo = getCeoAgent();
 
-      if (ceo && ceo.agent_name === agentName) {
-        // CEO: run orchestration loop
-        logger.info('Running CEO orchestration heartbeat');
-        await runCeoHeartbeat(root, agentName);
-      } else {
-        // Worker: check for assigned work and execute
-        const orgNode = getOrgNode(agentName);
-        if (orgNode) {
-          const todoIssues = listIssues({ assigned_to: agentName, status: ['todo', 'in_progress'] });
-          if (todoIssues.length > 0) {
-            logger.info(`Worker ${agentName} has ${todoIssues.length} assigned issue(s), running heartbeat`);
-            await runWorkerHeartbeat(root, agentName, orgNode.role, orgNode.title || agentName);
+      // Check if enough time has passed since last orchestration tick for this agent
+      const orchIntervalMs = parseIntervalMs(settings.heartbeat_interval || '30m');
+      const lastTick = lastOrchTick.get(agentName) || 0;
+      const elapsed = Date.now() - lastTick;
+
+      if (elapsed >= orchIntervalMs) {
+        lastOrchTick.set(agentName, Date.now());
+
+        const ceo = getCeoAgent();
+        if (ceo && ceo.agent_name === agentName) {
+          logger.info(`Running CEO orchestration heartbeat (interval: ${settings.heartbeat_interval})`);
+          await runCeoHeartbeat(root, agentName);
+        } else {
+          const orgNode = getOrgNode(agentName);
+          if (orgNode) {
+            const todoIssues = listIssues({ assigned_to: agentName, status: ['todo', 'in_progress'] });
+            if (todoIssues.length > 0) {
+              logger.info(`Worker ${agentName} has ${todoIssues.length} assigned issue(s), running heartbeat`);
+              await runWorkerHeartbeat(root, agentName, orgNode.role, orgNode.title || agentName);
+            }
           }
         }
+      } else {
+        logger.debug(`Orchestration tick skipped for ${agentName} — ${Math.round((orchIntervalMs - elapsed) / 1000)}s remaining`);
       }
     }
   } catch {
