@@ -17,6 +17,7 @@ import {
 } from './index.js';
 import { createRun, completeRun, failRun, appendRunLog, countRecentFailures } from './runs.js';
 import { getClaudeClient } from '../claude.js';
+import { setCurrentIssueId } from './tools.js';
 import type { Issue } from './types.js';
 
 const logger = createLogger('worker-heartbeat');
@@ -164,6 +165,7 @@ export async function runWorkerHeartbeat(
       '- If you need information from another agent, add a comment on the issue with @agentname asking your question. They will be notified and can respond.',
       '- If you discover new work that needs doing (not part of this issue), use create_backlog_issue to log it. The CEO will review and prioritize.',
       '- If another agent tagged you in a comment with useful context, incorporate it into your current work. Do NOT create a new task for it unless it is genuinely separate work.',
+      '- When you create or modify a file as a deliverable, call report_artifact with the path and a short description of what it contains.',
       '- Do NOT use the agent bus for orchestration communication — use issue comments so everything is tracked.',
       '',
       'When you are done, write a concise summary of:',
@@ -179,12 +181,18 @@ export async function runWorkerHeartbeat(
     ].join('\n');
 
     // Step 3: Run Claude to do the actual work (stream output to log file)
+    setCurrentIssueId(targetIssue.id);
     const client = getClaudeClient();
-    const result = await client.complete(prompt, {
-      maxTurns: 25,
-      subprocess: true,
-      onChunk: (chunk) => appendRunLog(runId, chunk),
-    });
+    let result: string;
+    try {
+      result = await client.complete(prompt, {
+        maxTurns: 25,
+        subprocess: true,
+        onChunk: (chunk) => appendRunLog(runId, chunk),
+      });
+    } finally {
+      setCurrentIssueId(null);
+    }
 
     // Step 4: Parse the status from the result
     let newStatus: 'done' | 'in_review' | 'blocked' | 'in_progress' = 'in_progress';

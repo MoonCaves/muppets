@@ -198,6 +198,19 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_activity_entity ON activity_log(entity_type, entity_id);
   CREATE INDEX IF NOT EXISTS idx_activity_time ON activity_log(created_at DESC);
 
+  -- Artifacts — files/deliverables created by agents
+  CREATE TABLE IF NOT EXISTS artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    description TEXT,
+    agent_name TEXT NOT NULL,
+    issue_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (issue_id) REFERENCES issues(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_artifacts_agent ON artifacts(agent_name);
+  CREATE INDEX IF NOT EXISTS idx_artifacts_issue ON artifacts(issue_id);
+
   -- Heartbeat run history
   CREATE TABLE IF NOT EXISTS heartbeat_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

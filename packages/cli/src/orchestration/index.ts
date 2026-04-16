@@ -12,6 +12,7 @@ export type {
   Company, Project, OrgNode, Goal, GoalKPI, GoalLevel, GoalStatus,
   Issue, IssueStatus, IssuePriority, IssueComment,
   InboxItem, InboxUrgency, InboxStatus,
+  Artifact,
   ActivityEntry,
   HeartbeatRun, HeartbeatRunType, HeartbeatRunStatus,
   OrchestrationSettings,
@@ -46,6 +47,9 @@ export {
 
 // Inbox
 export { createInboxItem, listInbox, acknowledgeInboxItem, resolveInboxItem, getInboxItem, getPendingInboxCount } from './inbox.js';
+
+// Artifacts
+export { createArtifact, listArtifacts, getArtifact, deleteArtifact } from './artifacts.js';
 
 // Activity
 export { logActivity, getActivityLog } from './activity.js';

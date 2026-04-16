@@ -30,6 +30,7 @@ import {
   recoverStuckIssues, recoverStuckRuns,
   queueWorkerHeartbeat, queueCeoHeartbeat,
   setMentionTrigger,
+  createArtifact, listArtifacts, getArtifact,
 } from '../orchestration/index.js';
 import { runCeoHeartbeat } from '../orchestration/ceo-heartbeat.js';
 import { runWorkerHeartbeat } from '../orchestration/worker-heartbeat.js';
@@ -498,6 +499,45 @@ export function createOrchestrationRouter(
     if (req.query.after) filters.after = req.query.after;
     res.json({ entries: getActivityLog(filters as any) });
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // Artifacts
+  // ─────────────────────────────────────────────────────────────────
+
+  router.get('/artifacts', (req, res) => {
+    const filters: Record<string, unknown> = {};
+    if (req.query.agent_name) filters.agent_name = req.query.agent_name;
+    if (req.query.issue_id) filters.issue_id = Number(req.query.issue_id);
+    if (req.query.limit) filters.limit = Number(req.query.limit);
+    res.json({ artifacts: listArtifacts(filters as any) });
+  });
+
+  router.get('/artifacts/:id', (req, res) => {
+    const artifact = getArtifact(Number(param(req, 'id')));
+    if (!artifact) return res.status(404).json({ error: 'Artifact not found' });
+    res.json({ artifact });
+  });
+
+  router.get('/artifacts/:id/content', (req, res) => {
+    const artifact = getArtifact(Number(param(req, 'id')));
+    if (!artifact) return res.status(404).json({ error: 'Artifact not found' });
+    try {
+      const content = readFileSync(artifact.file_path, 'utf-8');
+      res.json({ content, path: artifact.file_path });
+    } catch {
+      res.status(404).json({ error: 'File not found on disk' });
+    }
+  });
+
+  router.post('/artifacts', asyncHandler(async (req, res) => {
+    const { file_path, description, agent_name, issue_id } = req.body;
+    if (!file_path || !agent_name) {
+      res.status(400).json({ error: 'file_path and agent_name are required' });
+      return;
+    }
+    const artifact = createArtifact({ file_path, description, agent_name, issue_id });
+    res.status(201).json({ artifact });
+  }));
 
   // ─────────────────────────────────────────────────────────────────
   // Heartbeat Runs
