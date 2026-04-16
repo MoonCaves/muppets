@@ -27,21 +27,28 @@ export function getOrchDb(): Database.Database {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   const dbPath = join(dir, 'orchestration.db');
-  db = openWithRecovery(dbPath);
-  db.pragma('journal_mode = WAL');
+  const conn = openWithRecovery(dbPath);
+  try {
+    conn.pragma('journal_mode = WAL');
+    conn.exec(SCHEMA);
 
-  db.exec(SCHEMA);
-
-  // Migrations for existing databases — check column existence before altering
-  const columns = db.prepare("PRAGMA table_info(heartbeat_runs)").all() as Array<{name: string}>;
-  const columnNames = new Set(columns.map(c => c.name));
-  if (!columnNames.has('log_output')) {
-    db.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_output TEXT');
+    // Migrations for existing databases — check column existence before altering
+    const columns = conn.prepare("PRAGMA table_info(heartbeat_runs)").all() as Array<{name: string}>;
+    const columnNames = new Set(columns.map(c => c.name));
+    if (!columnNames.has('log_output')) {
+      conn.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_output TEXT');
+    }
+    if (!columnNames.has('log_ref')) {
+      conn.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_ref TEXT');
+    }
+  } catch (err) {
+    // Close and rethrow — do NOT cache a broken connection
+    try { conn.close(); } catch { /* ignore */ }
+    logger.error('Failed to initialize orchestration database', { path: dbPath, error: String(err) });
+    throw err;
   }
-  if (!columnNames.has('log_ref')) {
-    db.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_ref TEXT');
-  }
 
+  db = conn;
   logger.info('Orchestration database initialized', { path: dbPath });
   return db;
 }
