@@ -1,0 +1,223 @@
+/**
+ * KyberBot — Heartbeat Run History
+ *
+ * Tracks every CEO and worker heartbeat execution: when it started,
+ * whether it succeeded or failed, which tool calls were made, and
+ * a summary of the result. Used for observability and the desktop
+ * app's run history view.
+ */
+
+import { getOrchDb } from './db.js';
+import { logActivity } from './activity.js';
+import { join } from 'path';
+import { homedir } from 'os';
+import { mkdirSync, existsSync, appendFileSync, readFileSync, statSync } from 'fs';
+import { createLogger } from '../logger.js';
+import type { HeartbeatRun, HeartbeatRunType } from './types.js';
+
+const logger = createLogger('orch-runs');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WRITE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get the log directory for run output files.
+ */
+function getLogDir(): string {
+  const dir = join(homedir(), '.kyberbot', 'run-logs');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Record the start of a heartbeat run. Creates a log file for streaming output.
+ * Returns the new run ID.
+ */
+export function createRun(agentName: string, type: HeartbeatRunType): number {
+  const db = getOrchDb();
+  const logRef = join(getLogDir(), `run-${Date.now()}-${agentName}.log`);
+  const result = db.prepare(`
+    INSERT INTO heartbeat_runs (agent_name, type, status, log_ref)
+    VALUES (?, ?, 'running', ?)
+  `).run(agentName, type, logRef);
+
+  // Create empty log file
+  appendFileSync(logRef, '');
+
+  const id = Number(result.lastInsertRowid);
+  logActivity({
+    actor: agentName,
+    action: `heartbeat.started`,
+    entity_type: 'run',
+    entity_id: String(id),
+    details: JSON.stringify({ type }),
+  });
+
+  return id;
+}
+
+/**
+ * Append text to a run's log file for live streaming.
+ */
+export function appendRunLog(id: number, text: string): void {
+  const run = getRun(id);
+  if (!run?.log_ref) return;
+  try {
+    appendFileSync(run.log_ref, text);
+  } catch (err) { logger.debug('Failed to append run log', { error: String(err) }); }
+}
+
+/**
+ * Read a run's log file with optional offset for incremental reading.
+ */
+export function readRunLog(id: number, offset: number = 0): { content: string; totalBytes: number } {
+  const run = getRun(id);
+  if (!run?.log_ref || !existsSync(run.log_ref)) {
+    return { content: run?.log_output || '', totalBytes: 0 };
+  }
+  try {
+    const stats = statSync(run.log_ref);
+    const totalBytes = stats.size;
+    if (offset >= totalBytes) return { content: '', totalBytes };
+    const buf = readFileSync(run.log_ref, 'utf-8');
+    return { content: buf.slice(offset), totalBytes };
+  } catch {
+    return { content: '', totalBytes: 0 };
+  }
+}
+
+/**
+ * Mark a run as successfully completed.
+ */
+export function completeRun(
+  id: number,
+  data: { result_summary?: string; tool_calls_json?: string; log_output?: string },
+): void {
+  const db = getOrchDb();
+  db.prepare(`
+    UPDATE heartbeat_runs
+    SET status = 'completed',
+        finished_at = datetime('now'),
+        result_summary = ?,
+        tool_calls_json = ?,
+        log_output = ?
+    WHERE id = ?
+  `).run(
+    data.result_summary ?? null,
+    data.tool_calls_json ?? null,
+    data.log_output ?? null,
+    id,
+  );
+
+  logActivity({
+    actor: getRun(id)?.agent_name || 'unknown',
+    action: 'heartbeat.completed',
+    entity_type: 'run',
+    entity_id: String(id),
+    details: data.result_summary ? JSON.stringify({ preview: data.result_summary.slice(0, 100) }) : null,
+  });
+
+  // Also write full output to log file for streaming reads
+  if (data.log_output) {
+    const run = getRun(id);
+    if (run?.log_ref) {
+      try { appendFileSync(run.log_ref, data.log_output); } catch (err) { logger.debug('Failed to write log file', { error: String(err) }); }
+    }
+  }
+}
+
+/**
+ * Mark a run as failed with an error message.
+ */
+export function failRun(id: number, error: string): void {
+  const db = getOrchDb();
+  db.prepare(`
+    UPDATE heartbeat_runs
+    SET status = 'failed',
+        finished_at = datetime('now'),
+        error = ?
+    WHERE id = ?
+  `).run(error, id);
+
+  logActivity({
+    actor: getRun(id)?.agent_name || 'unknown',
+    action: 'heartbeat.failed',
+    entity_type: 'run',
+    entity_id: String(id),
+    details: JSON.stringify({ error: error.slice(0, 200) }),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// READ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface RunFilters {
+  agent_name?: string;
+  type?: HeartbeatRunType;
+  limit?: number;
+}
+
+/**
+ * List recent heartbeat runs, newest first.
+ */
+export function listRuns(filters: RunFilters = {}): HeartbeatRun[] {
+  const db = getOrchDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (filters.agent_name) {
+    conditions.push('agent_name = ?');
+    params.push(filters.agent_name);
+  }
+  if (filters.type) {
+    conditions.push('type = ?');
+    params.push(filters.type);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = filters.limit || 50;
+
+  return db.prepare(
+    `SELECT id, agent_name, type, status, started_at, finished_at, prompt_summary, result_summary, tool_calls_json, error FROM heartbeat_runs ${where} ORDER BY started_at DESC LIMIT ?`
+  ).all(...params, limit) as HeartbeatRun[];
+}
+
+/**
+ * Get a single run by ID.
+ */
+export function getRun(id: number): HeartbeatRun | null {
+  const db = getOrchDb();
+  return db.prepare('SELECT * FROM heartbeat_runs WHERE id = ?').get(id) as HeartbeatRun | null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FAILURE COUNTING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Count how many times an agent has failed on a given issue in the last 24 hours.
+ */
+export function countRecentFailures(agentName: string, issueId: number): number {
+  const db = getOrchDb();
+  const row = db.prepare(
+    "SELECT COUNT(*) as count FROM heartbeat_runs WHERE LOWER(agent_name) = LOWER(?) AND status = 'failed' AND result_summary LIKE ? AND started_at > datetime('now', '-24 hours')"
+  ).get(agentName, `%KYB-${issueId}%`) as { count: number };
+  return row.count;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECOVERY — startup crash recovery
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Mark any runs stuck in 'running' status as failed after a fleet restart.
+ */
+export function recoverStuckRuns(): number {
+  const db = getOrchDb();
+  const result = db.prepare(
+    "UPDATE heartbeat_runs SET status='failed', error='Fleet restarted during execution', finished_at=datetime('now') WHERE status='running'"
+  ).run();
+  return result.changes;
+}

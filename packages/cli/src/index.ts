@@ -58,6 +58,7 @@ import { createEvalCommand } from './commands/eval.js';
 import { createPinCommand, createUnpinCommand, createPinnedCommand } from './commands/pin.js';
 import { createFleetCommand } from './commands/fleet.js';
 import { createBusCommand } from './commands/bus.js';
+import { createOrchCommand } from './commands/orch.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // VERSION
@@ -116,6 +117,7 @@ program.addCommand(createUnpinCommand());
 program.addCommand(createPinnedCommand());
 program.addCommand(createFleetCommand());
 program.addCommand(createBusCommand());
+program.addCommand(createOrchCommand());
 
 // When no subcommand is given, `run` executes as the default (isDefault: true).
 

@@ -25,6 +25,8 @@ export interface CompleteOptions {
   system?: string;
   maxTokens?: number;
   maxTurns?: number;
+  /** Callback for stdout chunks as they arrive (streaming). */
+  onChunk?: (chunk: string) => void;
   /**
    * Force subprocess mode for this call. Each invocation runs in an
    * isolated child process whose memory is reclaimed on exit.
@@ -144,7 +146,13 @@ export class ClaudeClient {
 
   private completeSubprocess(prompt: string, opts: CompleteOptions): Promise<string> {
     return new Promise((resolve, reject) => {
-      const args = ['-p'];
+      // Use stream-json format when onChunk is provided for live output
+      const useStreamJson = !!opts.onChunk;
+      const args = ['--print', '-'];
+      args.push('--dangerously-skip-permissions'); // Always skip — subprocesses are headless, no human to prompt
+      if (useStreamJson) {
+        args.push('--output-format', 'stream-json', '--verbose');
+      }
       if (opts.system) {
         args.push('--system-prompt', opts.system);
       }
@@ -182,6 +190,10 @@ export class ClaudeClient {
         stdoutBytes += data.length;
         if (stdoutBytes <= MAX_STDOUT) {
           chunks.push(data);
+          // Stream callback for live log capture
+          if (opts.onChunk) {
+            try { opts.onChunk(data.toString()); } catch { /* ignore */ }
+          }
         } else if (!stdoutDestroyed) {
           // Destroy the read stream to stop reading entirely.
           // Without this, rapid data arrival floods GC with temporary Buffers.
@@ -204,7 +216,29 @@ export class ClaudeClient {
         stdoutBytes = 0;
 
         if (code === 0) {
-          resolve(stdout);
+          if (useStreamJson) {
+            // Parse stream-json: extract the final result text from JSONL
+            // The last line with type "result" has the final text
+            let resultText = '';
+            for (const line of stdout.split('\n')) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              try {
+                const event = JSON.parse(trimmed);
+                if (event.type === 'result' && event.result) {
+                  resultText = event.result;
+                } else if (event.type === 'assistant' && event.message?.content) {
+                  // Accumulate assistant text blocks
+                  for (const block of event.message.content) {
+                    if (block.type === 'text') resultText = block.text;
+                  }
+                }
+              } catch { /* not valid JSON — skip */ }
+            }
+            resolve(resultText || stdout);
+          } else {
+            resolve(stdout);
+          }
         } else {
           logger.error(`claude subprocess exited with code ${code}`, { stderr: stderr.slice(0, 500) });
           reject(new Error(`claude subprocess failed: ${stderr.slice(0, 500) || `exit code ${code}`}`));

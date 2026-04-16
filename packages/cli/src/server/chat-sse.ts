@@ -204,7 +204,7 @@ function chatViaSubprocess(
       '--output-format', 'stream-json',
       '--verbose',
       '--model', model,
-      '--permission-mode', 'acceptEdits',
+      '--dangerously-skip-permissions',
       '--allowedTools', 'Bash', 'WebFetch', 'WebSearch', 'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Agent', 'Skill',
     ];
 
