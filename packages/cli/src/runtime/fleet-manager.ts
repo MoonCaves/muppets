@@ -18,6 +18,7 @@ import { getMetrics, errorMiddleware } from '../monitoring.js';
 import { startTunnel, getTunnelUrl } from '../services/tunnel.js';
 import { ServiceHandle } from '../types.js';
 import { mountWebUi } from '../server/agent-router.js';
+import { createOrchestrationRouter } from '../server/orchestration-api.js';
 
 const logger = createLogger('fleet');
 
@@ -248,22 +249,17 @@ export class FleetManager {
     });
 
     // ── Orchestration API ───────────────────────────────────────────
-    try {
-      const { createOrchestrationRouter } = await import('../server/orchestration-api.js');
-      // Pass agent identities so the orch API can serve role/description data
-      const agentIdentities = new Map<string, { name: string; description: string; root: string }>();
-      for (const [name, agent] of this.agents) {
-        agentIdentities.set(name, {
-          name: agent.identity.agent_name || name,
-          description: agent.identity.agent_description || '',
-          root: agent.root,
-        });
-      }
-      this.app.use('/fleet/orch', createOrchestrationRouter(agentIdentities));
-      logger.info('Orchestration API mounted at /fleet/orch');
-    } catch (error) {
-      logger.warn('Failed to mount orchestration API', { error: String(error) });
+    // Pass agent identities so the orch API can serve role/description data
+    const agentIdentities = new Map<string, { name: string; description: string; root: string }>();
+    for (const [name, agent] of this.agents) {
+      agentIdentities.set(name, {
+        name: agent.identity.agent_name || name,
+        description: agent.identity.agent_description || '',
+        root: agent.root,
+      });
     }
+    this.app.use('/fleet/orch', createOrchestrationRouter(agentIdentities));
+    logger.info('Orchestration API mounted at /fleet/orch');
 
     // Mount web UI BEFORE auth — browsers don't send Bearer tokens on page loads
     mountWebUi(this.app, ''); // root UI
