@@ -67,6 +67,37 @@ async function tick(root: string): Promise<void> {
     return;
   }
 
+  // Check active hours
+  if (!isWithinActiveHours(root)) {
+    logger.debug('Outside active hours — skipping');
+    return;
+  }
+
+  // ── Orchestration heartbeat ─────────────────────────────────────
+  // If this agent is the CEO in the orchestration layer, run the
+  // CEO heartbeat instead of (or in addition to) the standard tick.
+  try {
+    const { getCeoAgent, getOrchestrationSettings } = await import('../orchestration/index.js');
+    const { runCeoHeartbeat } = await import('../orchestration/ceo-heartbeat.js');
+    const settings = getOrchestrationSettings();
+
+    if (settings.orchestration_enabled) {
+      const identity = getIdentityForRoot(root);
+      const agentName = identity.agent_name;
+      const ceo = getCeoAgent();
+
+      if (ceo && ceo.agent_name === agentName) {
+        logger.info('Running CEO orchestration heartbeat');
+        await runCeoHeartbeat(root, agentName);
+        // CEO still runs normal heartbeat tasks too (fall through)
+      }
+    }
+  } catch {
+    // Orchestration not initialized — that's fine, skip
+  }
+
+  // ── Standard heartbeat ──────────────────────────────────────────
+
   // Skip if HEARTBEAT.md doesn't exist or is empty
   const heartbeatPath = join(root, 'HEARTBEAT.md');
   if (!existsSync(heartbeatPath)) {
@@ -77,12 +108,6 @@ async function tick(root: string): Promise<void> {
   const content = readFileSync(heartbeatPath, 'utf-8').trim();
   if (!content || !content.includes('## Tasks')) {
     logger.debug('HEARTBEAT.md has no tasks — skipping');
-    return;
-  }
-
-  // Check active hours
-  if (!isWithinActiveHours(root)) {
-    logger.debug('Outside active hours — skipping');
     return;
   }
 
@@ -155,6 +180,18 @@ async function tick(root: string): Promise<void> {
       }
     } catch { /* not in fleet mode */ }
 
+    // Worker orchestration context — inject assigned issues and tools
+    try {
+      const { getOrgNode } = await import('../orchestration/index.js');
+      const { getWorkerOrchestrationContext } = await import('../orchestration/worker-heartbeat.js');
+      const agentName = getIdentityForRoot(root).agent_name || 'KyberBot';
+      const orgNode = getOrgNode(agentName);
+      if (orgNode && !orgNode.is_ceo) {
+        const orchContext = getWorkerOrchestrationContext(agentName);
+        if (orchContext) promptParts.push(orchContext);
+      }
+    } catch { /* orchestration not initialized */ }
+
     const prompt = promptParts.join('\n');
 
     const client = getClaudeClient();
@@ -169,6 +206,17 @@ async function tick(root: string): Promise<void> {
         'If nothing needs attention, reply HEARTBEAT_OK.',
       ].join(' '),
     });
+
+    // Process orchestration tool calls from worker agents
+    try {
+      const { getOrgNode } = await import('../orchestration/index.js');
+      const { processWorkerToolCalls } = await import('../orchestration/worker-heartbeat.js');
+      const agentName = getIdentityForRoot(root).agent_name || 'KyberBot';
+      const orgNode = getOrgNode(agentName);
+      if (orgNode && !orgNode.is_ceo) {
+        processWorkerToolCalls(result, agentName);
+      }
+    } catch { /* orchestration not initialized */ }
 
     // Suppress HEARTBEAT_OK
     if (result.trim() === 'HEARTBEAT_OK') {
