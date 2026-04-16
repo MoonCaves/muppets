@@ -14,10 +14,15 @@ import {
   upsertKPI,
   setOrgNode,
   createInboxItem,
+  createArtifact,
 } from './index.js';
 import type { IssueStatus, IssuePriority, InboxUrgency, GoalLevel, GoalStatus } from './types.js';
 
 const logger = createLogger('orch-tools');
+
+// Current issue context — set by worker-heartbeat before Claude call
+let currentIssueId: number | null = null;
+export function setCurrentIssueId(id: number | null): void { currentIssueId = id; }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TOOL DEFINITIONS (injected into system prompt)
@@ -87,6 +92,14 @@ const WORKER_TOOLS: ToolDef[] = [
       description: { type: 'string', description: 'Issue description', required: false },
       assigned_to: { type: 'string', description: 'Suggest an agent (yourself or another)', required: false },
       priority: { type: 'string', description: 'Suggested priority', required: false, enum: ['critical', 'high', 'medium', 'low'] },
+    },
+  },
+  {
+    name: 'report_artifact',
+    description: 'Report a file you created or modified as a deliverable. Call this whenever you create a meaningful output file (research, reports, code, configs).',
+    parameters: {
+      file_path: { type: 'string', description: 'Full path to the file', required: true },
+      description: { type: 'string', description: 'What this file contains', required: false },
     },
   },
 ];
@@ -247,6 +260,13 @@ export function executeTool(
         body: params.body as string | undefined,
         urgency: (params.urgency as InboxUrgency) || 'normal',
         related_issue_id: params.related_issue_id ? Number(params.related_issue_id) : undefined,
+      });
+    case 'report_artifact':
+      return createArtifact({
+        file_path: params.file_path as string,
+        description: params.description as string | undefined,
+        agent_name: actor,
+        issue_id: currentIssueId ?? undefined,
       });
 
     // CEO tools
