@@ -190,6 +190,19 @@ export async function runWorkerHeartbeat(
         subprocess: true,
         onChunk: (chunk) => appendRunLog(runId, chunk),
       });
+
+      // Step 3.5: Parse and execute any orchestration tool calls in the response
+      // (e.g., report_artifact, create_backlog_issue, add_comment)
+      const { parseToolCalls, executeTool } = await import('./tools.js');
+      const toolCalls = parseToolCalls(result);
+      for (const call of toolCalls) {
+        try {
+          executeTool(call.name, call.params, agentName);
+          logger.info(`Worker tool call executed: ${call.name}`, { agent: agentName });
+        } catch (err) {
+          logger.warn(`Worker tool call failed: ${call.name}`, { agent: agentName, error: String(err) });
+        }
+      }
     } finally {
       setCurrentIssueId(null);
     }
