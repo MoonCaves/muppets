@@ -247,6 +247,24 @@ export class FleetManager {
       res.json({ messages: history });
     });
 
+    // ── Orchestration API ───────────────────────────────────────────
+    try {
+      const { createOrchestrationRouter } = await import('../server/orchestration-api.js');
+      // Pass agent identities so the orch API can serve role/description data
+      const agentIdentities = new Map<string, { name: string; description: string; root: string }>();
+      for (const [name, agent] of this.agents) {
+        agentIdentities.set(name, {
+          name: agent.identity.agent_name || name,
+          description: agent.identity.agent_description || '',
+          root: agent.root,
+        });
+      }
+      this.app.use('/fleet/orch', createOrchestrationRouter(agentIdentities));
+      logger.info('Orchestration API mounted at /fleet/orch');
+    } catch (error) {
+      logger.warn('Failed to mount orchestration API', { error: String(error) });
+    }
+
     // Mount web UI BEFORE auth — browsers don't send Bearer tokens on page loads
     mountWebUi(this.app, ''); // root UI
     for (const [name] of this.agents) {

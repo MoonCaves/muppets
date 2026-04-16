@@ -25,6 +25,17 @@ let intervalId: NodeJS.Timeout | null = null;
 let running = false;
 let busy = false;
 
+// Orchestration runs on its own interval, separate from the standard heartbeat.
+// This tracks when the last orchestration tick ran per agent.
+const lastOrchTick = new Map<string, number>();
+
+function parseIntervalMs(intervalStr: string): number {
+  const match = intervalStr.match(/^(\d+)(m|h)$/);
+  return match
+    ? (match[2] === 'h' ? Number(match[1]) * 60 * 60 * 1000 : Number(match[1]) * 60 * 1000)
+    : 30 * 60 * 1000;
+}
+
 export function markBusy(isBusy: boolean): void {
   busy = isBusy;
 }
@@ -32,11 +43,7 @@ export function markBusy(isBusy: boolean): void {
 export async function startHeartbeat(root: string): Promise<ServiceHandle> {
   const identity = getIdentityForRoot(root);
   const intervalStr = identity.heartbeat_interval || '30m';
-  // Parse: '30m' → 30*60*1000, '1h' → 60*60*1000
-  const match = intervalStr.match(/^(\d+)(m|h)$/);
-  const intervalMs = match
-    ? (match[2] === 'h' ? Number(match[1]) * 60 * 60 * 1000 : Number(match[1]) * 60 * 1000)
-    : 30 * 60 * 1000;
+  const intervalMs = parseIntervalMs(intervalStr);
   logger.info(`Heartbeat interval: ${intervalMs / 1000 / 60} minutes`);
 
   running = true;
@@ -67,6 +74,57 @@ async function tick(root: string): Promise<void> {
     return;
   }
 
+  // Check active hours
+  if (!isWithinActiveHours(root)) {
+    logger.debug('Outside active hours — skipping');
+    return;
+  }
+
+  // ── Orchestration heartbeat ─────────────────────────────────────
+  // CEO and workers run on the orchestration interval (from settings),
+  // which may differ from the standard heartbeat interval (from identity.yaml).
+  try {
+    const { getCeoAgent, getOrgNode, getOrchestrationSettings, listIssues } = await import('../orchestration/index.js');
+    const { runCeoHeartbeat } = await import('../orchestration/ceo-heartbeat.js');
+    const { runWorkerHeartbeat } = await import('../orchestration/worker-heartbeat.js');
+    const settings = getOrchestrationSettings();
+
+    if (settings.orchestration_enabled) {
+      const identity = getIdentityForRoot(root);
+      const agentName = identity.agent_name;
+
+      // Check if enough time has passed since last orchestration tick for this agent
+      const orchIntervalMs = parseIntervalMs(settings.heartbeat_interval || '30m');
+      const lastTick = lastOrchTick.get(agentName) || 0;
+      const elapsed = Date.now() - lastTick;
+
+      if (elapsed >= orchIntervalMs) {
+        lastOrchTick.set(agentName, Date.now());
+
+        const ceo = getCeoAgent();
+        if (ceo && ceo.agent_name === agentName) {
+          logger.info(`Running CEO orchestration heartbeat (interval: ${settings.heartbeat_interval})`);
+          await runCeoHeartbeat(root, agentName);
+        } else {
+          const orgNode = getOrgNode(agentName);
+          if (orgNode) {
+            const todoIssues = listIssues({ assigned_to: agentName, status: ['todo', 'in_progress'] });
+            if (todoIssues.length > 0) {
+              logger.info(`Worker ${agentName} has ${todoIssues.length} assigned issue(s), running heartbeat`);
+              await runWorkerHeartbeat(root, agentName, orgNode.role, orgNode.title || agentName);
+            }
+          }
+        }
+      } else {
+        logger.debug(`Orchestration tick skipped for ${agentName} — ${Math.round((orchIntervalMs - elapsed) / 1000)}s remaining`);
+      }
+    }
+  } catch {
+    // Orchestration not initialized — that's fine, skip
+  }
+
+  // ── Standard heartbeat ──────────────────────────────────────────
+
   // Skip if HEARTBEAT.md doesn't exist or is empty
   const heartbeatPath = join(root, 'HEARTBEAT.md');
   if (!existsSync(heartbeatPath)) {
@@ -77,12 +135,6 @@ async function tick(root: string): Promise<void> {
   const content = readFileSync(heartbeatPath, 'utf-8').trim();
   if (!content || !content.includes('## Tasks')) {
     logger.debug('HEARTBEAT.md has no tasks — skipping');
-    return;
-  }
-
-  // Check active hours
-  if (!isWithinActiveHours(root)) {
-    logger.debug('Outside active hours — skipping');
     return;
   }
 
@@ -155,6 +207,18 @@ async function tick(root: string): Promise<void> {
       }
     } catch { /* not in fleet mode */ }
 
+    // Worker orchestration context — inject assigned issues and tools
+    try {
+      const { getOrgNode } = await import('../orchestration/index.js');
+      const { getWorkerOrchestrationContext } = await import('../orchestration/worker-heartbeat.js');
+      const agentName = getIdentityForRoot(root).agent_name || 'KyberBot';
+      const orgNode = getOrgNode(agentName);
+      if (orgNode && !orgNode.is_ceo) {
+        const orchContext = getWorkerOrchestrationContext(agentName);
+        if (orchContext) promptParts.push(orchContext);
+      }
+    } catch { /* orchestration not initialized */ }
+
     const prompt = promptParts.join('\n');
 
     const client = getClaudeClient();
@@ -169,6 +233,17 @@ async function tick(root: string): Promise<void> {
         'If nothing needs attention, reply HEARTBEAT_OK.',
       ].join(' '),
     });
+
+    // Process orchestration tool calls from worker agents
+    try {
+      const { getOrgNode } = await import('../orchestration/index.js');
+      const { processWorkerToolCalls } = await import('../orchestration/worker-heartbeat.js');
+      const agentName = getIdentityForRoot(root).agent_name || 'KyberBot';
+      const orgNode = getOrgNode(agentName);
+      if (orgNode && !orgNode.is_ceo) {
+        processWorkerToolCalls(result, agentName);
+      }
+    } catch { /* orchestration not initialized */ }
 
     // Suppress HEARTBEAT_OK
     if (result.trim() === 'HEARTBEAT_OK') {
