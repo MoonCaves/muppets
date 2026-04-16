@@ -105,6 +105,7 @@ export async function runWorkerHeartbeat(
 
     const prompt = [
       `You are ${agentTitle}, ${agentRole}.`,
+      `Your working directory is: ${root}`,
       '',
       `## Your Current Task`,
       '',
@@ -117,7 +118,13 @@ export async function runWorkerHeartbeat(
       '',
       '## Instructions',
       '',
-      'Complete this task. You are running in fully autonomous mode with unrestricted permissions. You can read, write, and modify any file. You can run any bash command. There are no permission prompts — just do the work. Do not ask for permission or say you need permission. Act.',
+      'Complete this task. You are running in fully autonomous mode with unrestricted permissions.',
+      '',
+      '**Scope rules:**',
+      '- Stay focused on THIS issue only. Do not explore unrelated systems.',
+      '- Work within your agent directory and the KyberBot project. Do not access KyberCo, Paperclip, or other unrelated systems.',
+      '- If the task is too large to complete in one pass, do the most impactful part and report STATUS: IN_PROGRESS with what remains.',
+      '- Do not spend more than 15-20 tool calls on a single task. If you are going in circles, report STATUS: BLOCKED with what is stopping you.',
       '',
       'When you are done, write a concise summary of:',
       '1. What you did',
