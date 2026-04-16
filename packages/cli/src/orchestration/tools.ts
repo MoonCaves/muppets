@@ -94,14 +94,6 @@ const WORKER_TOOLS: ToolDef[] = [
       priority: { type: 'string', description: 'Suggested priority', required: false, enum: ['critical', 'high', 'medium', 'low'] },
     },
   },
-  {
-    name: 'report_artifact',
-    description: 'Report a file you created or modified as a deliverable. Call this whenever you create a meaningful output file (research, reports, code, configs).',
-    parameters: {
-      file_path: { type: 'string', description: 'Full path to the file', required: true },
-      description: { type: 'string', description: 'What this file contains', required: false },
-    },
-  },
 ];
 
 const CEO_ONLY_TOOLS: ToolDef[] = [

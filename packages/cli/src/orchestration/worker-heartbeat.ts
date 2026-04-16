@@ -165,7 +165,7 @@ export async function runWorkerHeartbeat(
       '- If you need information from another agent, add a comment on the issue with @agentname asking your question. They will be notified and can respond.',
       '- If you discover new work that needs doing (not part of this issue), use create_backlog_issue to log it. The CEO will review and prioritize.',
       '- If another agent tagged you in a comment with useful context, incorporate it into your current work. Do NOT create a new task for it unless it is genuinely separate work.',
-      '- When you create or modify a file as a deliverable, call report_artifact with the path and a short description of what it contains.',
+      '- When you create a deliverable file, mention its full path in your summary so it can be tracked.',
       '- Do NOT use the agent bus for orchestration communication — use issue comments so everything is tracked.',
       '',
       'When you are done, write a concise summary of:',
@@ -191,17 +191,31 @@ export async function runWorkerHeartbeat(
         onChunk: (chunk) => appendRunLog(runId, chunk),
       });
 
-      // Step 3.5: Parse and execute any orchestration tool calls in the response
-      // (e.g., report_artifact, create_backlog_issue, add_comment)
-      const { parseToolCalls, executeTool } = await import('./tools.js');
-      const toolCalls = parseToolCalls(result);
-      for (const call of toolCalls) {
-        try {
-          executeTool(call.name, call.params, agentName);
-          logger.info(`Worker tool call executed: ${call.name}`, { agent: agentName });
-        } catch (err) {
-          logger.warn(`Worker tool call failed: ${call.name}`, { agent: agentName, error: String(err) });
+      // Step 3.5: Auto-detect created files from the response and register as artifacts.
+      // Agents mention file paths in their output — we extract them and check if they exist.
+      try {
+        const { createArtifact } = await import('./artifacts.js');
+        const { existsSync } = await import('fs');
+        const fileMatches = result.match(/\/Users\/[^\s\)\}\`\"\'\,]+\.(?:md|txt|json|yaml|yml|ts|js|csv|html)/g);
+        if (fileMatches) {
+          const seen = new Set<string>();
+          for (const filePath of fileMatches) {
+            const cleaned = filePath.replace(/[.\)\]]+$/, ''); // strip trailing punctuation
+            if (seen.has(cleaned)) continue;
+            seen.add(cleaned);
+            if (existsSync(cleaned)) {
+              createArtifact({
+                file_path: cleaned,
+                description: `Created during KYB-${targetIssue.id}: ${targetIssue.title}`,
+                agent_name: agentName,
+                issue_id: targetIssue.id,
+              });
+              logger.info(`Auto-detected artifact: ${cleaned}`, { agent: agentName, issue: targetIssue.id });
+            }
+          }
         }
+      } catch (err) {
+        logger.debug('Artifact auto-detection failed', { error: String(err) });
       }
     } finally {
       setCurrentIssueId(null);
