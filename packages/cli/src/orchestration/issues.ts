@@ -275,10 +275,28 @@ export function addComment(issueId: number, authorAgent: string, content: string
   const issue = getIssue(issueId);
   if (!issue) throw new Error(`Issue ${issueId} not found`);
 
+  // Auto-fix agent mentions: "Atlas —" or "Atlas," at the start → "@Atlas —" or "@Atlas,"
+  // Also fix "**Atlas**" → "**@Atlas**" patterns
+  const orgNodes = db.prepare('SELECT agent_name, title FROM org_nodes').all() as Array<{ agent_name: string; title: string | null }>;
+  let fixedContent = content;
+  for (const node of orgNodes) {
+    const names = [node.agent_name, node.title].filter(Boolean) as string[];
+    for (const name of names) {
+      // Fix "Name —" or "Name," or "Name:" at start of comment (without @)
+      const startPattern = new RegExp(`^(\\*\\*)?${name}(\\*\\*)?\\s*[—,:\\-]`, 'i');
+      if (startPattern.test(fixedContent) && !fixedContent.startsWith(`@${name}`) && !fixedContent.startsWith(`**@${name}`)) {
+        fixedContent = fixedContent.replace(startPattern, `@${name.toLowerCase()} —`);
+      }
+      // Fix "Name" mentions in the middle of text (only if preceded by whitespace/newline and followed by punctuation/space)
+      const midPattern = new RegExp(`(?<=\\s|^|\\n)(\\*\\*)?${name}(\\*\\*)?(?=\\s*[—,:\\-\\.])`, 'gi');
+      fixedContent = fixedContent.replace(midPattern, `@${name.toLowerCase()}`);
+    }
+  }
+
   const result = db.prepare(`
     INSERT INTO issue_comments (issue_id, author_agent, content)
     VALUES (?, ?, ?)
-  `).run(issueId, authorAgent, content);
+  `).run(issueId, authorAgent, fixedContent);
 
   // Update issue timestamp
   db.prepare('UPDATE issues SET updated_at = datetime(\'now\') WHERE id = ?').run(issueId);
