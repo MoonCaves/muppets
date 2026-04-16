@@ -34,7 +34,7 @@ export function buildCeoHeartbeatPrompt(agentName: string): string {
   const sections: string[] = [];
 
   // Identity
-  sections.push(`You are ${agentName}, the CEO of this KyberBot company.`);
+  sections.push(`You are ${agentName}, the CEO orchestrator of this company.`);
   sections.push('Your job is to review company state, plan work, assign tasks to agents, and drive progress toward goals.');
   sections.push('');
 
@@ -248,7 +248,7 @@ export async function runCeoHeartbeat(root: string, agentName: string): Promise<
       subprocess: true,
       onChunk: (chunk) => appendRunLog(runId, chunk),
       system: [
-        `You are ${agentName}, the CEO orchestrator for a KyberBot company.`,
+        `You are ${agentName}, the CEO orchestrator for this company.`,
         'You coordinate a team of AI agents to achieve company goals.',
         'Use the orchestration tools provided to manage goals, issues, and communication.',
         'Be decisive and action-oriented. Create concrete tasks with clear descriptions.',
