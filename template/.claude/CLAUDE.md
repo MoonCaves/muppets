@@ -66,7 +66,7 @@ I can edit these fields in `identity.yaml` when the user asks:
 
 | Field | Example User Request |
 |-------|---------------------|
-| `agent_name` | "Change your name to Atlas" |
+| `agent_name` | "Change your name to Nova" |
 | `agent_description` | "You're my engineering assistant" |
 | `timezone` | "Switch to Pacific time", "I moved to London" |
 | `heartbeat_interval` | "Check less often", "every 15 minutes" |
