@@ -384,10 +384,7 @@ fi
 exec "$NODE" "$CLI_ENTRY" "$@"
 `;
 
-    writeFileSync(binPath, wrapper, 'utf-8');
-    // chmod +x
-    const { chmodSync } = require('fs');
-    chmodSync(binPath, '755');
+    writeFileSync(binPath, wrapper, { mode: 0o755 });
 
     // Also save the current node path as the locked binary
     const nodePath = process.execPath;
