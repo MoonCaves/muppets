@@ -67,7 +67,7 @@ export function createOnboardCommand(): Command {
 
       const agentName = await input({
         message: 'What should your AI agent be called?',
-        default: 'Atlas',
+        default: 'MyAgent',
       });
 
       const agentDescription = await input({
