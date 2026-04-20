@@ -336,6 +336,7 @@ export async function runCeoHeartbeat(root: string, agentName: string): Promise<
     const result = await client.complete(prompt, {
       maxTurns: 15,
       subprocess: true,
+      cwd: root,
       model: getHeartbeatModelForRoot(root),
       onChunk: (chunk) => appendRunLog(runId, chunk),
       system: [

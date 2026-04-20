@@ -60,6 +60,8 @@ export async function handleIncomingBusMessage(
       system: systemPrompt,
       model: 'sonnet' as const,
       maxTokens: 1024,
+      subprocess: true,
+      cwd: root,
     });
     return response;
   } catch (error) {

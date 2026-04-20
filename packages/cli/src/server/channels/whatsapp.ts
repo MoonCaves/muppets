@@ -87,6 +87,7 @@ export class WhatsAppChannel implements Channel {
               system: systemPrompt,
               maxTurns: 30,
               subprocess: true,
+              cwd: this.root,
             });
 
             // Track both sides in history

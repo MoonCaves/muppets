@@ -34,6 +34,17 @@ export interface CompleteOptions {
    * in the long-lived server process.
    */
   subprocess?: boolean;
+  /**
+   * Working directory for the spawned `claude` process. Claude Code
+   * attributes session files to the project corresponding to this
+   * directory. In fleet mode the parent process has one CWD shared
+   * across many agents, so without this option every agent's Haiku
+   * calls land in the same project dir. Callers that know which
+   * agent's work is being done (sleep steps, heartbeat, channel
+   * handlers, bus handler, store-conversation) should pass the
+   * agent's root here. Only used by subprocess mode.
+   */
+  cwd?: string;
 }
 
 // Model ID mapping
@@ -172,6 +183,11 @@ export class ClaudeClient {
           CLAUDECODE: '',
           CLAUDE_CODE_ENTRYPOINT: '',
         },
+        // cwd determines which ~/.claude/projects/<slug> dir Claude Code
+        // writes this session's .jsonl to. Without this, every agent's
+        // brain/sleep/heartbeat calls in fleet mode attribute to the same
+        // dir (the fleet process's cwd). Callers pass the agent's root.
+        cwd: opts.cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 

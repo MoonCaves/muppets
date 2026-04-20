@@ -189,6 +189,7 @@ export async function runWorkerHeartbeat(
       result = await client.complete(prompt, {
         maxTurns: 25,
         subprocess: true,
+        cwd: root,
         model: getHeartbeatModelForRoot(root),
         onChunk: (chunk) => appendRunLog(runId, chunk),
       });

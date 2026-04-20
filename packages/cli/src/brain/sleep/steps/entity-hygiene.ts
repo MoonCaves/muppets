@@ -311,7 +311,7 @@ export async function runEntityHygieneStep(
         const client = getClaudeClient();
         const profileText = await client.complete(
           `Write a concise 2-sentence profile for this ${entity.type}. Be factual, third person, specific. Do not start with "Based on..." or reference data sources.\n\nEntity: ${entity.name} (${entity.type})\nFacts:\n${factList}`,
-          { model: 'haiku', maxTokens: 200, maxTurns: 1, subprocess: true }
+          { model: 'haiku', maxTokens: 200, maxTurns: 1, subprocess: true, cwd: root }
         );
 
         if (profileText && profileText.length > 20) {
@@ -557,7 +557,7 @@ async function assessAndMerge(
     const batch = candidates.slice(i, i + 5);
 
     try {
-      const decisions = await assessBatch(claude, batch);
+      const decisions = await assessBatch(claude, batch, root);
       assessCount += batch.length;
 
       for (let j = 0; j < decisions.length; j++) {
@@ -601,7 +601,8 @@ async function assessAndMerge(
 
 async function assessBatch(
   claude: ReturnType<typeof getClaudeClient>,
-  candidates: CandidatePair[]
+  candidates: CandidatePair[],
+  root: string
 ): Promise<AIDecision[]> {
   const pairsDescription = candidates.map((c, idx) => {
     const formatProfile = (label: string, p: EntityProfile) => {
@@ -647,7 +648,7 @@ Rules:
 - A person and a company with the same name are usually DIFFERENT unless context clearly shows they refer to the same thing.
 
 Return ONLY the JSON array, no other text.`,
-      { model: 'haiku', maxTokens: 1500, subprocess: true }
+      { model: 'haiku', maxTokens: 1500, subprocess: true, cwd: root }
     ),
     {
       retries: 2,

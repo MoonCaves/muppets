@@ -64,6 +64,7 @@ export async function extractFactsRealtime(
         maxTokens: 256,
         maxTurns: 1,
         subprocess: true,
+        cwd: root,
       }
     );
 
