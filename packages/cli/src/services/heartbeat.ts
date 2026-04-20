@@ -296,6 +296,7 @@ async function tick(root: string): Promise<void> {
     const result = await client.complete(prompt, {
       maxTurns: 15,
       subprocess: true,
+      cwd: root,
       model: getHeartbeatModelForRoot(root),
       system: [
         'You are a heartbeat task executor for a KyberBot agent.',
