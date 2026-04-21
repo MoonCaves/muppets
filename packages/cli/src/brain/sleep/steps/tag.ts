@@ -79,7 +79,7 @@ Content:
 ${content}
 
 Example response: ["meeting", "pricing", "strategy", "planning"]`,
-            { model: 'haiku', maxTokens: 500, subprocess: true }
+            { model: 'haiku', maxTokens: 500, subprocess: true, cwd: root }
           ),
           {
             retries: 2,

@@ -135,6 +135,7 @@ Only include facts with "updates" or "extends" relationship. Return [] if no rel
       maxTokens: 512,
       maxTurns: 1,
       subprocess: true,
+      cwd: root,
     });
 
     // 5. Parse response

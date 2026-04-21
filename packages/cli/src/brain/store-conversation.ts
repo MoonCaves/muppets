@@ -247,7 +247,7 @@ async function storeConversationImpl(
 
   try {
     logger.info('storeConversation:extractRelationships:before', { heapMB: heapMB() });
-    const extraction = await extractRelationships(fullText);
+    const extraction = await extractRelationships(fullText, { cwd: root });
     logger.info('storeConversation:extractRelationships:after', { heapMB: heapMB() });
     entities = extraction.entities;
     relationships = extraction.relationships;

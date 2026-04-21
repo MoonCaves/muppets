@@ -102,6 +102,9 @@ export async function extractRelationships(
   options: {
     maxTokens?: number;
     timeout?: number;
+    /** Agent root — passed as CWD to the Claude subprocess so Claude
+     *  Code attributes the session to the right agent's project dir. */
+    cwd?: string;
   } = {}
 ): Promise<RelationshipExtractionResult> {
   const client = getClaudeClient();
@@ -121,6 +124,7 @@ export async function extractRelationships(
         maxTokens,
         maxTurns: 1,
         subprocess: true,
+        cwd: options.cwd,
       }
     );
 
