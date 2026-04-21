@@ -154,6 +154,7 @@ export async function runReasoningStep(
             maxTokens: 512,
             maxTurns: 1,
             subprocess: true,
+            cwd: root,
           });
 
           const deductions = parseInsights(deductionResponse);
@@ -205,6 +206,7 @@ export async function runReasoningStep(
             maxTokens: 512,
             maxTurns: 1,
             subprocess: true,
+            cwd: root,
           });
 
           const inductions = parseInsights(inductionResponse);

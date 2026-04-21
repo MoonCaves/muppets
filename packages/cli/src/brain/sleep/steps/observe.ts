@@ -136,6 +136,7 @@ export async function runObserveStep(
             maxTokens: 1024,
             maxTurns: 1,
             subprocess: true,
+            cwd: root,
           }
         );
 
