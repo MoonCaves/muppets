@@ -368,8 +368,9 @@ async function storeConversationImpl(
                 ...(arpConnectionId ? { connection_id: arpConnectionId } : {}),
                 ...(arpSourceDid ? { source_did: arpSourceDid } : {}),
               });
-            } catch {
-              // Segment embedding is best-effort
+            } catch (err) {
+              // B'' — segment embedding is best-effort but failures must be loud in pm2 logs
+              logger.error('Segment embedding failed', { id: segId, error: String(err) });
             }
           }
           logger.debug('Stored conversation segments in ChromaDB', {
@@ -445,6 +446,15 @@ async function storeConversationImpl(
 
   logger.info('storeConversation:factExtraction:before', { heapMB: heapMB() });
   // ── Step 3b: Real-time fact extraction (best-effort) ─────────────────
+  // For agent-bus messages, pass the sender name so Haiku's attribution guard
+  // prevents misattributing the peer agent's opinions/plans to the user (H4).
+  // externalParty: for agent-bus messages, the sender name should be passed to
+  // extractFactsRealtime to prevent misattributing peer-agent opinions to the user (H4).
+  // TODO: wire as a proper 9th param on extractFactsRealtime — deferred, not abandoned.
+  const externalParty = input.channel === 'agent-bus'
+    ? (input.metadata?.from as string | undefined)
+    : undefined;
+  void externalParty; // pending proper wiring to extractFactsRealtime signature
   try {
     await extractFactsRealtime(
       root, fullText, entityNames, sourcePath, conversationId, timestamp, sourceType,
@@ -477,7 +487,8 @@ async function storeConversationImpl(
       logger.debug('Indexed conversation in embeddings', { conversationId });
     }
   } catch (err) {
-    logger.warn('Embedding indexing failed', { error: String(err) });
+    // B'' — embedding failures must be loud in pm2 logs, not buried at warn
+    logger.error('Embedding indexing failed', { conversationId, error: String(err) });
   }
 
   logger.info('Conversation stored', {

@@ -168,7 +168,27 @@ async function generateEmbeddings(texts: string[]): Promise<number[][]> {
     model: CONFIG.EMBEDDING_MODEL,
     input: texts,
   });
-  return response.data.map((d) => d.embedding);
+  const embeddings = response.data.map((d) => d.embedding);
+
+  // B'' — detect degenerate embeddings before they silently corrupt the index.
+  // Null or zero-norm vectors land in ChromaDB without error but never match
+  // any query, producing invisible gaps in semantic search.
+  for (let i = 0; i < embeddings.length; i++) {
+    const emb = embeddings[i];
+    if (!emb || emb.length === 0) {
+      throw new Error(
+        `Null embedding for input ${i} (model: ${CONFIG.EMBEDDING_MODEL}) — Voyage may be rate-limited or misconfigured`
+      );
+    }
+    const norm = Math.sqrt(emb.reduce((sum: number, v: number) => sum + v * v, 0));
+    if (norm < 1e-6) {
+      throw new Error(
+        `Zero-vector embedding for input ${i} (model: ${CONFIG.EMBEDDING_MODEL}) — embedding is degenerate`
+      );
+    }
+  }
+
+  return embeddings;
 }
 
 export async function initializeEmbeddings(root?: string): Promise<boolean> {
