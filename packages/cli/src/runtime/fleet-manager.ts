@@ -266,45 +266,10 @@ export class FleetManager {
     });
 
     // ── Bus API ──────────────────────────────────────────────────────────
-
-    // POST /fleet/bus/send — send message between agents
-    this.app.post('/fleet/bus/send', express.json(), async (req, res) => {
-      const { from, to, message, topic } = req.body;
-      if (!from || !to || !message) {
-        return res.status(400).json({ error: 'Missing from, to, or message' });
-      }
-      try {
-        const result = await this.bus.send({ from, to, type: 'query', payload: message, topic });
-        res.json({ ok: true, response: result });
-      } catch (error) {
-        res.status(500).json({ error: String(error) });
-      }
-    });
-
-    // POST /fleet/bus/broadcast — broadcast to all agents
-    this.app.post('/fleet/bus/broadcast', express.json(), async (req, res) => {
-      const { from, message, topic } = req.body;
-      if (!from || !message) {
-        return res.status(400).json({ error: 'Missing from or message' });
-      }
-      try {
-        await this.bus.send({ from, to: '*', type: 'notify', payload: message, topic });
-        res.json({ ok: true });
-      } catch (error) {
-        res.status(500).json({ error: String(error) });
-      }
-    });
-
-    // GET /fleet/bus/history — message history
-    this.app.get('/fleet/bus/history', (req, res) => {
-      const limit = parseInt(req.query.limit as string) || 50;
-      const agent = req.query.agent as string;
-      let history = this.bus.getHistory(limit);
-      if (agent) {
-        history = history.filter(m => m.from === agent || m.to === agent);
-      }
-      res.json({ messages: history });
-    });
+    // Mount bus routes on the main fleet app. We also mount these on every
+    // per-agent listener below — otherwise the CLI run from a non-fleet-port
+    // agent's CWD hits its own port and gets 404.
+    this.mountBusRoutes(this.app);
 
     // GET /fleet/heartbeats — per-agent heartbeat schedule with last_fired
     // and next_due. Sources:
@@ -477,7 +442,8 @@ export class FleetManager {
     // Start per-agent port listeners (so existing tunnel URLs keep working)
     for (const [name, agent] of this.agents) {
       const agentPort = agent.identity.server?.port;
-      if (!agentPort || agentPort === port) continue; // skip if same as fleet port
+      if (!agentPort) continue;
+      if (agentPort === port) { logger.warn(`Agent "${name}" port ${agentPort} collides with fleet port — skipping per-agent listener`); continue; }
 
       try {
         const agentApp = express();
@@ -514,6 +480,14 @@ export class FleetManager {
         const singleAuth = createFleetAuthMiddleware(
           new Map([[name, { root: agent.root, apiToken: agent.apiToken }]])
         );
+
+        // Mount fleet bus + history routes on this per-agent port too, behind
+        // the single-agent auth. This lets `kyberbot bus send` work when run
+        // from any agent's CWD — the CLI reads identity.yaml.server.port and
+        // hits localhost:<port>/fleet/bus/*. Without this, only the agent
+        // whose port matches the fleet port (default 3456) can use the bus.
+        this.mountBusRoutes(agentApp, singleAuth);
+
         agentApp.use('/', singleAuth, agent.createRouter());
         agentApp.use(errorMiddleware);
 
@@ -726,5 +700,55 @@ export class FleetManager {
 
   getAgentNames(): string[] {
     return [...this.agents.keys()];
+  }
+
+  /**
+   * Mount the /fleet/bus/* routes on the given Express app.
+   * Called once for the main fleet port, and once per per-agent port — so the
+   * CLI can hit the bus from any agent's CWD without caring which port the
+   * fleet picked. Auth is provided by the caller (multi-agent on the fleet
+   * port, single-agent on per-agent ports).
+   */
+  private mountBusRoutes(app: express.Express, auth?: express.RequestHandler): void {
+    const guard = auth || ((_req, _res, next) => next());
+
+    // POST /fleet/bus/send — send message between agents
+    app.post('/fleet/bus/send', guard, express.json(), async (req, res) => {
+      const { from, to, message, topic } = req.body;
+      if (!from || !to || !message) {
+        return res.status(400).json({ error: 'Missing from, to, or message' });
+      }
+      try {
+        const result = await this.bus.send({ from, to, type: 'query', payload: message, topic });
+        res.json({ ok: true, response: result });
+      } catch (error) {
+        res.status(500).json({ error: String(error) });
+      }
+    });
+
+    // POST /fleet/bus/broadcast — broadcast to all agents
+    app.post('/fleet/bus/broadcast', guard, express.json(), async (req, res) => {
+      const { from, message, topic } = req.body;
+      if (!from || !message) {
+        return res.status(400).json({ error: 'Missing from or message' });
+      }
+      try {
+        await this.bus.send({ from, to: '*', type: 'notify', payload: message, topic });
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: String(error) });
+      }
+    });
+
+    // GET /fleet/bus/history — message history
+    app.get('/fleet/bus/history', guard, (req, res) => {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const agent = req.query.agent as string;
+      let history = this.bus.getHistory(limit);
+      if (agent) {
+        history = history.filter(m => m.from === agent || m.to === agent);
+      }
+      res.json({ messages: history });
+    });
   }
 }
