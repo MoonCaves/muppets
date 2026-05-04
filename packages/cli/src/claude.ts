@@ -123,17 +123,44 @@ const MODEL_IDS: Record<string, string> = {
 };
 
 /**
- * Proxy base URL for the OpenAI-shape completion route. Default points at
- * production. Override with PROXY_BRAIN_URL for staging/local. Any
- * OpenAI-compatible endpoint (LiteLLM, OpenRouter, Anthropic compat,
- * vLLM, Ollama, raw OpenAI) plugs in by config — no code change needed.
+ * Proxy base URL for the OpenAI-shape completion route.
+ *
+ * Precedence: PROXY_BRAIN_URL → LITELLM_BRAIN_URL (deprecated) → production default.
+ * LITELLM_BRAIN_URL is accepted as a backward-compat fallback for operators who
+ * haven't yet renamed their .env. It emits a deprecation warn on every proxy init
+ * (lazy-init guard means once per process). Will be removed in a future release.
+ * Any OpenAI-compatible endpoint (LiteLLM, OpenRouter, Anthropic compat, vLLM,
+ * Ollama, raw OpenAI) plugs in by config — no code change needed.
  */
 function getProxyBaseUrl(): string {
-  return process.env.PROXY_BRAIN_URL || 'https://ai-api.remotelyhuman.com/v1';
+  if (process.env.PROXY_BRAIN_URL) return process.env.PROXY_BRAIN_URL;
+  if (process.env.LITELLM_BRAIN_URL) {
+    logger.warn(
+      '[DEPRECATED] LITELLM_BRAIN_URL is set — rename to PROXY_BRAIN_URL in .env. ' +
+      'Backward-compat fallback is active; support will be removed in a future release.'
+    );
+    return process.env.LITELLM_BRAIN_URL;
+  }
+  return 'https://ai-api.remotelyhuman.com/v1';
 }
 
+/**
+ * Proxy API key for the OpenAI-shape completion route.
+ *
+ * Precedence: PROXY_BRAIN_KEY → LITELLM_BRAIN_KEY (deprecated) → undefined.
+ * LITELLM_BRAIN_KEY is accepted as a backward-compat fallback and emits a
+ * deprecation warn on proxy init. Will be removed in a future release.
+ */
 function getProxyApiKey(): string | undefined {
-  return process.env.PROXY_BRAIN_KEY;
+  if (process.env.PROXY_BRAIN_KEY) return process.env.PROXY_BRAIN_KEY;
+  if (process.env.LITELLM_BRAIN_KEY) {
+    logger.warn(
+      '[DEPRECATED] LITELLM_BRAIN_KEY is set — rename to PROXY_BRAIN_KEY in .env. ' +
+      'Backward-compat fallback is active; support will be removed in a future release.'
+    );
+    return process.env.LITELLM_BRAIN_KEY;
+  }
+  return undefined;
 }
 
 /**
@@ -216,21 +243,41 @@ export class ClaudeClient {
     if (this.proxy || this.proxyInitFailed) return;
     try {
       const OpenAI = (await import('openai')).default;
+      // Read once each — getProxy*() may emit deprecation warns for old env var names.
+      const baseUrl = getProxyBaseUrl();
       const apiKey = getProxyApiKey();
+
+      // Source labels for [ORCH_CONFIG] — resolved after getProxy*() calls so
+      // deprecation warns have already fired before we log the startup line.
+      const urlSource = process.env.PROXY_BRAIN_URL ? 'PROXY_BRAIN_URL'
+        : process.env.LITELLM_BRAIN_URL ? 'LITELLM_BRAIN_URL'
+        : 'default';
+      const keySource = process.env.PROXY_BRAIN_KEY ? 'PROXY_BRAIN_KEY'
+        : process.env.LITELLM_BRAIN_KEY ? 'LITELLM_BRAIN_KEY'
+        : 'missing';
+
       if (!apiKey) {
         this.proxyInitFailed = true;
         throw new Error(
-          'PROXY_BRAIN_KEY not set. Completion route requires a key. ' +
+          'PROXY_BRAIN_KEY (or deprecated LITELLM_BRAIN_KEY) not set. ' +
+          'Completion route requires a key. ' +
           'Set PROXY_BRAIN_KEY in .env or pass _transport: "subprocess" ' +
           'on the call to use the legacy path.'
         );
       }
       this.proxy = new OpenAI({
         apiKey,
-        baseURL: getProxyBaseUrl(),
+        baseURL: baseUrl,
         maxRetries: 0, // single source of truth lives in withRetry at call sites
       });
-      logger.debug('Initialized proxy completion client', { baseUrl: getProxyBaseUrl() });
+      // [ORCH_CONFIG] — greppable single line fired once per process lifetime
+      // (lazy-init guard above prevents re-fire). Confirms proxy endpoint and
+      // key source at first-use. Grep pattern:
+      //   grep ORCH_CONFIG kyberbot.log
+      logger.info(
+        `[ORCH_CONFIG] proxy_url=${baseUrl} url_source=${urlSource} key_source=${keySource} ts=${new Date().toISOString()}`
+      );
+      logger.debug('Initialized proxy completion client', { baseUrl });
     } catch (err) {
       // Second init-failure path: catches both missing-key throws from the
       // guard above AND unexpected errors (import failure, OpenAI ctor, bad

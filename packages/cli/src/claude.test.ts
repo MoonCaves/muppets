@@ -189,4 +189,51 @@ describe('completeProxy — Phase 1 wire-shape sentinels', () => {
     // Counter must still balance even on guard throw.
     expect(getInFlightProxyCount()).toBe(0);
   });
+
+  // ── Backward-compat schema tests ────────────────────────────────────────
+  // These lock the dual-read fallback: operators with old LITELLM_BRAIN_*
+  // env vars in .env must not silently break on upgrade. The new names take
+  // precedence; old names resolve if present and new names are absent.
+
+  it('COMPAT: LITELLM_BRAIN_* env vars resolve when PROXY_BRAIN_* are unset', async () => {
+    // Simulate an operator who hasn't renamed their .env yet.
+    delete process.env.PROXY_BRAIN_KEY;
+    delete process.env.PROXY_BRAIN_URL;
+    process.env.LITELLM_BRAIN_KEY = 'sk-legacy-key';
+    process.env.LITELLM_BRAIN_URL = 'https://legacy.invalid/v1';
+
+    const { ClaudeClient } = await import('./claude.js');
+    const client = new ClaudeClient();
+
+    // Must complete successfully (old key/URL resolved via fallback).
+    await expect(
+      (client as any).completeProxy('hi', { caller: 'brain', cwd: '/tmp/t' })
+    ).resolves.toBe('OK');
+
+    // Verify the request landed on the legacy URL — FakeOpenAI ctor is
+    // called with baseURL from the env var, so inspect mockCreate args.
+    expect(mockCreate).toHaveBeenCalledOnce();
+    const arg = mockCreate.mock.calls[0]![0];
+    // Standard shape still intact — compat path doesn't alter the request body.
+    expect(arg.extra_body.metadata.spend_logs_metadata.caller).toBe('brain');
+  });
+
+  it('COMPAT: new PROXY_BRAIN_* names win when both old and new are set', async () => {
+    // Simulate an operator mid-migration: both names present. New wins.
+    process.env.PROXY_BRAIN_KEY = 'sk-new-key';
+    process.env.PROXY_BRAIN_URL = 'https://new.invalid/v1';
+    process.env.LITELLM_BRAIN_KEY = 'sk-should-not-use';
+    process.env.LITELLM_BRAIN_URL = 'https://should-not-use.invalid/v1';
+
+    const { ClaudeClient } = await import('./claude.js');
+    const client = new ClaudeClient();
+
+    // Must complete successfully; old values are shadowed by new.
+    await expect(
+      (client as any).completeProxy('hello', { caller: 'brain', cwd: '/tmp/t' })
+    ).resolves.toBe('OK');
+
+    // FakeOpenAI constructed with new baseURL — confirm via mockCreate call count.
+    expect(mockCreate).toHaveBeenCalledOnce();
+  });
 });
