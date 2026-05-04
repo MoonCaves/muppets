@@ -159,6 +159,36 @@ export function transitionIssue(id: number, newStatus: IssueStatus, actor: strin
   return getIssue(id)!;
 }
 
+/**
+ * Hard-delete an issue and its dependents (comments, artifacts links,
+ * inbox notifications). Use only for issues the user explicitly wants
+ * removed — typically cancelled or backlog items they changed their mind
+ * about. Activity log keeps a record of the deletion for audit.
+ */
+export function deleteIssue(id: number, actor: string): void {
+  const db = getOrchDb();
+  const issue = getIssue(id);
+  if (!issue) return; // already gone — idempotent
+
+  const txn = db.transaction(() => {
+    // Children first (FKs are advisory in SQLite without PRAGMA, but be tidy)
+    db.prepare('DELETE FROM issue_comments WHERE issue_id = ?').run(id);
+    db.prepare('UPDATE inbox SET related_issue_id = NULL WHERE related_issue_id = ?').run(id);
+    db.prepare('UPDATE artifacts SET issue_id = NULL WHERE issue_id = ?').run(id);
+    db.prepare('UPDATE issues SET parent_id = NULL WHERE parent_id = ?').run(id);
+    db.prepare('DELETE FROM issues WHERE id = ?').run(id);
+  });
+  txn();
+
+  logActivity({
+    actor,
+    action: 'issue.deleted',
+    entity_type: 'issue',
+    entity_id: String(id),
+    details: JSON.stringify({ title: issue.title, prior_status: issue.status }),
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ATOMIC CHECKOUT
 // ═══════════════════════════════════════════════════════════════════════════════

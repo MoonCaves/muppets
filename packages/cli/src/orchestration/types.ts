@@ -122,6 +122,9 @@ export interface IssueComment {
 
 export type InboxUrgency = 'high' | 'normal' | 'low';
 export type InboxStatus = 'pending' | 'acknowledged' | 'resolved';
+/** `needs_action` = escalation/blocker requiring human input.
+ *  `completed`    = FYI notification of a task an agent finished. */
+export type InboxKind = 'needs_action' | 'completed';
 
 export interface InboxItem {
   id: number;
@@ -130,10 +133,16 @@ export interface InboxItem {
   body: string | null;
   urgency: InboxUrgency;
   status: InboxStatus;
+  kind: InboxKind;
   related_issue_id: number | null;
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+}
+
+/** Inbox item with its joined artifacts (when loaded via getInboxItemWithArtifacts). */
+export interface InboxItemWithArtifacts extends InboxItem {
+  artifacts: Artifact[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

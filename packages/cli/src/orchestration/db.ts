@@ -64,6 +64,13 @@ export function getOrchDb(): Database.Database {
     if (!issueColumnNames.has('external_source')) {
       conn.exec('ALTER TABLE issues ADD COLUMN external_source TEXT');
     }
+    // Inbox split into action vs completed (v1.9.3): inbox.kind separates
+    // escalations needing user action from completed-task notifications.
+    const inboxColumns = conn.prepare("PRAGMA table_info(inbox)").all() as Array<{name: string}>;
+    const inboxColumnNames = new Set(inboxColumns.map(c => c.name));
+    if (!inboxColumnNames.has('kind')) {
+      conn.exec("ALTER TABLE inbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'needs_action'");
+    }
   } catch (err) {
     // Close and rethrow — do NOT cache a broken connection
     try { conn.close(); } catch { /* ignore */ }
@@ -206,6 +213,7 @@ const SCHEMA = `
     body TEXT,
     urgency TEXT NOT NULL DEFAULT 'normal' CHECK(urgency IN ('high', 'normal', 'low')),
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'acknowledged', 'resolved')),
+    kind TEXT NOT NULL DEFAULT 'needs_action',
     related_issue_id INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     resolved_at TEXT,
@@ -213,6 +221,7 @@ const SCHEMA = `
     FOREIGN KEY (related_issue_id) REFERENCES issues(id)
   );
   CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox(status);
+  CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox(kind);
 
   -- Activity log (append-only audit trail)
   CREATE TABLE IF NOT EXISTS activity_log (

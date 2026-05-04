@@ -37,7 +37,7 @@ export { createGoal, updateGoal, getGoal, listGoals, deleteGoal, upsertKPI, getK
 
 // Issues
 export {
-  createIssue, updateIssue, getIssue, listIssues,
+  createIssue, updateIssue, deleteIssue, getIssue, listIssues,
   transitionIssue, checkoutIssue, releaseCheckout,
   addComment, getComments,
   recoverStuckIssues,
@@ -46,7 +46,11 @@ export {
 } from './issues.js';
 
 // Inbox
-export { createInboxItem, listInbox, acknowledgeInboxItem, resolveInboxItem, getInboxItem, getPendingInboxCount } from './inbox.js';
+export {
+  createInboxItem, listInbox, listInboxWithArtifacts,
+  acknowledgeInboxItem, resolveInboxItem,
+  getInboxItem, getInboxItemWithArtifacts, getPendingInboxCount,
+} from './inbox.js';
 
 // Artifacts
 export { createArtifact, listArtifacts, getArtifact, deleteArtifact } from './artifacts.js';

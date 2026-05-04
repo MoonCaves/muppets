@@ -14,6 +14,7 @@
 import { createLogger } from '../logger.js';
 import {
   listIssues, getComments, checkoutIssue, transitionIssue, addComment,
+  createInboxItem, listArtifacts,
 } from './index.js';
 import { createRun, completeRun, failRun, appendRunLog, countRecentFailures } from './runs.js';
 import { transitionPhase, RunPhase } from './run-phases.js';
@@ -434,6 +435,29 @@ export async function runWorkerHeartbeat(
         logger.info(`Worker ${agentName} transitioned issue KYB-${targetIssue.id} to ${newStatus}`);
       } catch (err) {
         logger.warn(`Failed to transition issue KYB-${targetIssue.id} to ${newStatus}`, { error: String(err) });
+      }
+    }
+
+    // Step 6b: When a task fully completes, drop a "completed" notification
+    // into the inbox with the agent's summary. The desktop's Completed tab
+    // joins the issue's artifacts (auto-detected upstream during the run)
+    // for FYI display. BLOCKED stays out — it uses the existing
+    // escalate_to_human flow, IN_REVIEW intentionally stays out (per user).
+    if (newStatus === 'done') {
+      try {
+        const artifactCount = listArtifacts({ issue_id: targetIssue.id }).length;
+        const artifactSuffix = artifactCount > 0 ? ` (${artifactCount} artifact${artifactCount === 1 ? '' : 's'})` : '';
+        createInboxItem({
+          source_agent: agentName,
+          title: `Completed: ${targetIssue.title}${artifactSuffix}`,
+          body: summaryText.slice(0, 4000),
+          urgency: 'low',
+          kind: 'completed',
+          related_issue_id: targetIssue.id,
+        });
+        logger.info(`Inbox notification posted for completed KYB-${targetIssue.id}`, { artifactCount });
+      } catch (err) {
+        logger.warn(`Failed to post completed-inbox item for KYB-${targetIssue.id}`, { error: String(err) });
       }
     }
 

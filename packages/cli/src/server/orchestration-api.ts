@@ -21,9 +21,10 @@ import {
   listProjects, getProject, createProject, updateProject, deleteProject,
   getOrgChart, getOrgNode, setOrgNode, removeOrgNode, getCeoAgent, getDirectReports,
   listGoals, getGoal, createGoal, updateGoal, deleteGoal, upsertKPI, getKPIsForGoal,
-  listIssues, getIssue, createIssue, updateIssue, transitionIssue, checkoutIssue, releaseCheckout,
+  listIssues, getIssue, createIssue, updateIssue, deleteIssue, transitionIssue, checkoutIssue, releaseCheckout,
   addComment, getComments,
-  listInbox, getInboxItem, createInboxItem, acknowledgeInboxItem, resolveInboxItem, getPendingInboxCount,
+  listInbox, listInboxWithArtifacts, getInboxItem, getInboxItemWithArtifacts,
+  createInboxItem, acknowledgeInboxItem, resolveInboxItem, getPendingInboxCount,
   getActivityLog,
   listRuns, getRun, readRunLog,
   getOrchestrationSettings, updateOrchestrationSettings,
@@ -400,6 +401,15 @@ export function createOrchestrationRouter(
     res.json({ issue });
   }));
 
+  // Hard-delete an issue. Idempotent — deleting a missing issue 200s.
+  // Cleans up comments, drops inbox/artifact references, and orphans
+  // any child issues' parent_id (rather than cascading the delete).
+  router.delete('/issues/:id', asyncHandler(async (req, res) => {
+    const actor = (req.body && req.body.actor) || 'human';
+    deleteIssue(Number(param(req, 'id')), actor);
+    res.json({ ok: true });
+  }));
+
   router.post('/issues/:id/transition', asyncHandler(async (req, res) => {
     const { status, actor } = req.body;
     if (!status) {
@@ -486,25 +496,48 @@ export function createOrchestrationRouter(
     const filters: Record<string, unknown> = {};
     if (req.query.status) filters.status = req.query.status;
     if (req.query.urgency) filters.urgency = req.query.urgency;
+    if (req.query.kind) filters.kind = req.query.kind;
     if (req.query.countOnly === 'true') {
-      return res.json({ count: getPendingInboxCount() });
+      const kind = typeof req.query.kind === 'string' ? req.query.kind : undefined;
+      return res.json({ count: getPendingInboxCount(kind as any) });
+    }
+    // When the desktop Completed tab queries with includeArtifacts=true,
+    // join artifacts so file deliverables render alongside the notice.
+    if (req.query.includeArtifacts === 'true') {
+      res.json({ items: listInboxWithArtifacts(filters as any) });
+      return;
     }
     res.json({ items: listInbox(filters as any) });
   });
 
   router.post('/inbox', asyncHandler(async (req, res) => {
-    const { source_agent, title, body, urgency, related_issue_id } = req.body;
+    const { source_agent, title, body, urgency, kind, related_issue_id } = req.body;
     if (!source_agent || !title) {
       res.status(400).json({ error: 'source_agent and title are required' });
       return;
     }
-    const item = createInboxItem({ source_agent, title, body, urgency, related_issue_id });
+    const item = createInboxItem({ source_agent, title, body, urgency, kind, related_issue_id });
     res.status(201).json({ item });
   }));
 
   router.get('/inbox/:id', (req, res) => {
+    // When includeArtifacts=true, return the joined shape with deliverables.
+    if (req.query.includeArtifacts === 'true') {
+      const item = getInboxItemWithArtifacts(Number(param(req, 'id')));
+      if (!item) return res.status(404).json({ error: 'Inbox item not found' });
+      // Auto-acknowledge on view (per user spec — inbox items are FYI).
+      // Idempotent: only flips pending → acknowledged, leaves resolved alone.
+      if (item.status === 'pending') {
+        try { acknowledgeInboxItem(item.id); } catch { /* ignore */ }
+      }
+      res.json({ item });
+      return;
+    }
     const item = getInboxItem(Number(param(req, 'id')));
     if (!item) return res.status(404).json({ error: 'Inbox item not found' });
+    if (item.status === 'pending') {
+      try { acknowledgeInboxItem(item.id); } catch { /* ignore */ }
+    }
     res.json({ item });
   });
 
