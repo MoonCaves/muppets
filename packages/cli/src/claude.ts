@@ -1,16 +1,20 @@
 /**
  * KyberBot — Claude Abstraction Layer
  *
- * Three modes:
- *   1. Agent SDK — Uses @anthropic-ai/claude-code (subscription users, recommended)
- *   2. SDK — Direct Anthropic API calls (requires ANTHROPIC_API_KEY)
- *   3. Subprocess — Spawns `claude -p` (fallback if Agent SDK fails to load)
+ * Four routes:
+ *   1. completion — LiteLLM HTTP via OpenAI-compatible client (Phase 1+ default for brain).
+ *      Set `caller` (e.g. 'brain') and the call routes to LiteLLM unless
+ *      `_transport: 'subprocess'` is set explicitly.
+ *   2. Agent SDK — Uses @anthropic-ai/claude-code (subscription users)
+ *   3. SDK — Direct Anthropic API calls (requires ANTHROPIC_API_KEY)
+ *   4. Subprocess — Spawns `claude -p` (default for user-facing chat
+ *      that hits the subscription path)
  *
  * All brain AI operations go through this layer.
  */
 
 import { spawn } from 'child_process';
-import { getClaudeMode, getClaudeModel, getClaudeModelForRoot, getRoot, isFleetMode } from './config.js';
+import { getAgentNameForRoot, getClaudeMode, getClaudeModel, getClaudeModelForRoot, getRoot, isFleetMode } from './config.js';
 import { createLogger } from './logger.js';
 
 const logger = createLogger('claude');
@@ -20,18 +24,41 @@ export interface Message {
   content: string;
 }
 
+/**
+ * Caller identifies which subsystem invoked completion. Open pattern
+ * (`KnownCaller | (string & {})`) — closed unions fight the architectural
+ * goal "any LLM on any process". An ESLint rule + runtime metric track
+ * unknown caller values; promotion path is documented in
+ * `brain/litellm-phase1-callers.md`.
+ */
+export type KnownCaller = 'brain' | 'subagent' | 'skill' | 'eval';
+
+/**
+ * Underscored override — set to `'subprocess'` to keep a call on the legacy
+ * Claude Code subscription path even when `caller` is set. Set to
+ * `'completion'` to force LiteLLM HTTP. Underscored to signal escape-hatch
+ * status; usage outside `claude.ts` and `debug/` is flagged by the ESLint
+ * `no-restricted-syntax` rule and emits a runtime warn log on every call.
+ */
+export type Transport = 'subprocess' | 'completion';
+
 export interface CompleteOptions {
-  model?: 'haiku' | 'sonnet' | 'opus';
+  /**
+   * Model identifier. Two shapes:
+   *   - Legacy short names ('haiku' | 'sonnet' | 'opus') for subprocess path.
+   *   - LiteLLM alias names ('haiku' | 'brain-fast' | …) for the completion
+   *     path. Open string so new aliases don't require a code change here.
+   */
+  model?: string;
   system?: string;
   maxTokens?: number;
   maxTurns?: number;
-  /** Callback for stdout chunks as they arrive (streaming). */
+  /** Callback for stdout chunks as they arrive (streaming, subprocess only). */
   onChunk?: (chunk: string) => void;
   /**
    * Force subprocess mode for this call. Each invocation runs in an
    * isolated child process whose memory is reclaimed on exit.
-   * Use for background/brain operations to avoid heap accumulation
-   * in the long-lived server process.
+   * Equivalent to `_transport: 'subprocess'` — kept for back-compat.
    */
   subprocess?: boolean;
   /**
@@ -42,10 +69,50 @@ export interface CompleteOptions {
    * calls land in the same project dir. Callers that know which
    * agent's work is being done (sleep steps, heartbeat, channel
    * handlers, bus handler, store-conversation) should pass the
-   * agent's root here. Only used by subprocess mode.
+   * agent's root here. Used by subprocess CWD AND completion metadata
+   * (agent_root + agent_name derivation).
    */
   cwd?: string;
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Phase 1 LiteLLM — completion-route fields
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Subsystem invoking completion. Required for completion route. Brain
+   * sites pass 'brain'. Sub-agents pass 'subagent'. Skills pass 'skill'.
+   * Eval harness passes 'eval'. New string values are accepted (open
+   * pattern) but flagged by lint + runtime metric.
+   */
+  caller?: KnownCaller | (string & {});
+
+  /**
+   * Dotted-hyphen call site for observability. Convention:
+   * `<subsystem>.<function-or-pass>`, lowercase. Examples:
+   * `brain.fact-extractor`, `brain.reasoning-pass1`, `brain.observe`,
+   * `skill.daily-task-reminder`. Forwarded to LiteLLM `metadata.call_site`.
+   */
+  callSite?: string;
+
+  /**
+   * Underscored escape hatch. `'completion'` → LiteLLM HTTP.
+   * `'subprocess'` → legacy `claude -p` spawn. When unset, routing is
+   * driven by `caller`: any caller routes to completion. Lint flags
+   * usage outside claude.ts/debug/.
+   */
+  _transport?: Transport;
 }
+
+/**
+ * Allowlist used by lint + runtime metric. Adding a value here means it
+ * stops being a "warn on unknown caller" hit and is promoted to first-class.
+ */
+export const KNOWN_CALLERS: readonly KnownCaller[] = Object.freeze([
+  'brain',
+  'subagent',
+  'skill',
+  'eval',
+]);
 
 // Model ID mapping
 const MODEL_IDS: Record<string, string> = {
@@ -54,9 +121,38 @@ const MODEL_IDS: Record<string, string> = {
   opus: 'claude-opus-4-6',
 };
 
+/**
+ * LiteLLM proxy URL. Default points at production. Override with
+ * LITELLM_BRAIN_URL for staging/local.
+ */
+function getLitellmBaseUrl(): string {
+  return process.env.LITELLM_BRAIN_URL || 'https://ai-api.remotelyhuman.com/v1';
+}
+
+function getLitellmApiKey(): string | undefined {
+  return process.env.LITELLM_BRAIN_KEY;
+}
+
+/**
+ * Derive the agent name for completion metadata. Reads identity.yaml at
+ * `cwd` (preferred) or falls back to basename(cwd) without `-agent` suffix.
+ */
+function deriveAgentName(cwd: string | undefined): string {
+  if (!cwd) return 'unknown';
+  try {
+    return getAgentNameForRoot(cwd);
+  } catch {
+    const parts = cwd.replace(/\/+$/, '').split('/');
+    const base = parts[parts.length - 1] || 'unknown';
+    return base.replace(/-agent$/, '') || base;
+  }
+}
+
 export class ClaudeClient {
   private mode: 'agent-sdk' | 'sdk' | 'subprocess';
   private sdk: any | null = null;
+  private litellm: any | null = null;
+  private litellmInitFailed = false;
 
   constructor() {
     const configMode = getClaudeMode();
