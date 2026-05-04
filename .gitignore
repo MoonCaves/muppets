@@ -13,3 +13,10 @@ logs/
 *.tgz
 coverage/
 .nyc_output/
+
+# Agent-instance directories — never belong in upstream working tree.
+# These hold per-deployment runtime state (private notes, infra docs).
+# Source incident: docs/infra/ leak that triggered the May 2026 history scrub.
+# Leading slash anchors to repo root — must NOT match packages/cli/src/brain/.
+/brain/
+/docs/infra/

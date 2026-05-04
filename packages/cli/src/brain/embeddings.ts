@@ -185,7 +185,8 @@ export async function initializeEmbeddings(root?: string): Promise<boolean> {
     logger.info('Initializing ChromaDB...');
 
     try {
-      const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8001';
+      // Default port 8000 matches Coolify-managed ChromaDB containers (same-host loopback).
+      const chromaUrl = process.env.CHROMA_URL || 'http://localhost:8000';
       chromaClient = new ChromaClient({ path: chromaUrl });
       await chromaClient.heartbeat();
       chromaAvailable = true;

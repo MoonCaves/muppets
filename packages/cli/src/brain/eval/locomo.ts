@@ -49,7 +49,8 @@ const logger = createLogger('eval');
 // CHROMADB REST API (bypasses the `chromadb` npm package entirely)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const CHROMA_URL = process.env.CHROMA_URL || 'http://localhost:8001';
+// Default port 8000 matches Coolify-managed ChromaDB containers (same-host loopback).
+const CHROMA_URL = process.env.CHROMA_URL || 'http://localhost:8000';
 const CHROMA_TENANT = 'default_tenant';
 const CHROMA_DB = 'default_database';
 

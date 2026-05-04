@@ -577,8 +577,8 @@ export function createOnboardCommand(): Command {
       const apiToken = `kb_${randomBytes(24).toString('hex')}`;
       envLines.push(`KYBERBOT_API_TOKEN=${apiToken}`);
       envLines.push('');
-      envLines.push('# ChromaDB URL (default)');
-      envLines.push('CHROMA_URL=http://localhost:8001');
+      envLines.push('# ChromaDB URL (default — port 8000 matches Coolify-managed containers)');
+      envLines.push('CHROMA_URL=http://localhost:8000');
       envLines.push('');
 
       const envPath = join(root, '.env');

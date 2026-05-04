@@ -125,12 +125,19 @@ const MODEL_IDS: Record<string, string> = {
 /**
  * Proxy base URL for the OpenAI-shape completion route.
  *
- * Precedence: PROXY_BRAIN_URL → LITELLM_BRAIN_URL (deprecated) → production default.
+ * Precedence: PROXY_BRAIN_URL → LITELLM_BRAIN_URL (deprecated) → built-in default.
  * LITELLM_BRAIN_URL is accepted as a backward-compat fallback for operators who
  * haven't yet renamed their .env. It emits a deprecation warn on every proxy init
  * (lazy-init guard means once per process). Will be removed in a future release.
  * Any OpenAI-compatible endpoint (LiteLLM, OpenRouter, Anthropic compat, vLLM,
  * Ollama, raw OpenAI) plugs in by config — no code change needed.
+ *
+ * Default `http://localhost:4000/v1` assumes the LiteLLM proxy is colocated on
+ * the same host as the agent (loopback only, never bound to a public interface).
+ * This is the recommended deployment shape: the proxy stays inside the host
+ * network and is not reachable externally, so no TLS, auth header, or firewall
+ * rule is required for the agent → proxy hop. Operators running the proxy on a
+ * separate host MUST set PROXY_BRAIN_URL explicitly — the default will not work.
  */
 function getProxyBaseUrl(): string {
   if (process.env.PROXY_BRAIN_URL) return process.env.PROXY_BRAIN_URL;
@@ -141,6 +148,7 @@ function getProxyBaseUrl(): string {
     );
     return process.env.LITELLM_BRAIN_URL;
   }
+  // Safe default: same-host loopback. See JSDoc above for deployment assumptions.
   return 'http://localhost:4000/v1';
 }
 
