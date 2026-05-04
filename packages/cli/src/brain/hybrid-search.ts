@@ -195,8 +195,8 @@ Ranking (JSON array of numbers):`;
     const response = await client.complete(prompt, {
       model: 'haiku',
       maxTokens: 200,
-      maxTurns: 1,
-      subprocess: true,
+      caller: 'hybrid-search',
+      callSite: 'hybrid-search-rerank',
     });
 
     const match = response.match(/\[[\d,\s]+\]/);

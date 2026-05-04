@@ -2,9 +2,9 @@
  * KyberBot — Claude Abstraction Layer
  *
  * Four routes:
- *   1. completion — LiteLLM HTTP via OpenAI-compatible client (Phase 1+ default for brain).
- *      Set `caller` (e.g. 'brain') and the call routes to LiteLLM unless
- *      `_transport: 'subprocess'` is set explicitly.
+ *   1. completion — OpenAI-shape completion route via configurable proxy endpoint
+ *      (Phase 1+ default for brain). Set `caller` (e.g. 'brain') and the call
+ *      routes to the proxy unless `_transport: 'subprocess'` is set explicitly.
  *   2. Agent SDK — Uses @anthropic-ai/claude-code (subscription users)
  *   3. SDK — Direct Anthropic API calls (requires ANTHROPIC_API_KEY)
  *   4. Subprocess — Spawns `claude -p` (default for user-facing chat
@@ -29,16 +29,17 @@ export interface Message {
  * (`KnownCaller | (string & {})`) — closed unions fight the architectural
  * goal "any LLM on any process". An ESLint rule + runtime metric track
  * unknown caller values; promotion path is documented in
- * `brain/litellm-phase1-callers.md`.
+ * `brain/openai-shape-callers.md`.
  */
 export type KnownCaller = 'brain' | 'subagent' | 'skill' | 'eval';
 
 /**
  * Underscored override — set to `'subprocess'` to keep a call on the legacy
  * Claude Code subscription path even when `caller` is set. Set to
- * `'completion'` to force LiteLLM HTTP. Underscored to signal escape-hatch
- * status; usage outside `claude.ts` and `debug/` is flagged by the ESLint
- * `no-restricted-syntax` rule and emits a runtime warn log on every call.
+ * `'completion'` to force the OpenAI-shape proxy route. Underscored to
+ * signal escape-hatch status; usage outside `claude.ts` and `debug/` is
+ * flagged by the ESLint `no-restricted-syntax` rule and emits a runtime
+ * warn log on every call.
  */
 export type Transport = 'subprocess' | 'completion';
 
@@ -46,7 +47,7 @@ export interface CompleteOptions {
   /**
    * Model identifier. Two shapes:
    *   - Legacy short names ('haiku' | 'sonnet' | 'opus') for subprocess path.
-   *   - LiteLLM alias names ('haiku' | 'brain-fast' | …) for the completion
+   *   - Proxy alias names ('haiku' | 'brain-fast' | …) for the completion
    *     path. Open string so new aliases don't require a code change here.
    */
   model?: string;
@@ -75,7 +76,7 @@ export interface CompleteOptions {
   cwd?: string;
 
   // ──────────────────────────────────────────────────────────────────────
-  // Phase 1 LiteLLM — completion-route fields
+  // Phase 1 completion-route fields (OpenAI-shape proxy)
   // ──────────────────────────────────────────────────────────────────────
 
   /**
@@ -90,12 +91,12 @@ export interface CompleteOptions {
    * Dotted-hyphen call site for observability. Convention:
    * `<subsystem>.<function-or-pass>`, lowercase. Examples:
    * `brain.fact-extractor`, `brain.reasoning-pass1`, `brain.observe`,
-   * `skill.daily-task-reminder`. Forwarded to LiteLLM `metadata.call_site`.
+   * `skill.daily-task-reminder`. Forwarded to proxy `metadata.call_site`.
    */
   callSite?: string;
 
   /**
-   * Underscored escape hatch. `'completion'` → LiteLLM HTTP.
+   * Underscored escape hatch. `'completion'` → OpenAI-shape proxy route.
    * `'subprocess'` → legacy `claude -p` spawn. When unset, routing is
    * driven by `caller`: any caller routes to completion. Lint flags
    * usage outside claude.ts/debug/.
@@ -122,15 +123,17 @@ const MODEL_IDS: Record<string, string> = {
 };
 
 /**
- * LiteLLM proxy URL. Default points at production. Override with
- * LITELLM_BRAIN_URL for staging/local.
+ * Proxy base URL for the OpenAI-shape completion route. Default points at
+ * production. Override with PROXY_BRAIN_URL for staging/local. Any
+ * OpenAI-compatible endpoint (LiteLLM, OpenRouter, Anthropic compat,
+ * vLLM, Ollama, raw OpenAI) plugs in by config — no code change needed.
  */
-function getLitellmBaseUrl(): string {
-  return process.env.LITELLM_BRAIN_URL || 'https://ai-api.remotelyhuman.com/v1';
+function getProxyBaseUrl(): string {
+  return process.env.PROXY_BRAIN_URL || 'https://ai-api.remotelyhuman.com/v1';
 }
 
-function getLitellmApiKey(): string | undefined {
-  return process.env.LITELLM_BRAIN_KEY;
+function getProxyApiKey(): string | undefined {
+  return process.env.PROXY_BRAIN_KEY;
 }
 
 /**
@@ -149,10 +152,10 @@ function deriveAgentName(cwd: string | undefined): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Phase C — In-flight LiteLLM call counter (Option α instrumentation)
+// Phase C — In-flight completion call counter (Option α instrumentation)
 // ──────────────────────────────────────────────────────────────────────
 //
-// Tracks completeLitellm() calls between request-send and return. Read
+// Tracks completeProxy() calls between request-send and return. Read
 // at fleet-manager shutdown to log [INFLIGHT_AT_RESTART] for the 1-week
 // observation window that gates Phase 1.6 (graceful-drain) work.
 //
@@ -162,17 +165,17 @@ function deriveAgentName(cwd: string | undefined): string {
 //
 // Module-scoped (not class-static) — fleet-wide single counter, even
 // with multiple ClaudeClient instances per agent runtime.
-let inFlightLitellmCount = 0;
+let inFlightProxyCount = 0;
 
-export function getInFlightLitellmCount(): number {
-  return inFlightLitellmCount;
+export function getInFlightProxyCount(): number {
+  return inFlightProxyCount;
 }
 
 export class ClaudeClient {
   private mode: 'agent-sdk' | 'sdk' | 'subprocess';
   private sdk: any | null = null;
-  private litellm: any | null = null;
-  private litellmInitFailed = false;
+  private proxy: any | null = null;
+  private proxyInitFailed = false;
 
   constructor() {
     const configMode = getClaudeMode();
@@ -204,43 +207,43 @@ export class ClaudeClient {
   }
 
   /**
-   * Lazy-init the LiteLLM HTTP client (OpenAI-compat). Cached on first
-   * use. If init fails, sets `litellmInitFailed` so subsequent calls
-   * hard-fail with a clear message instead of silently retrying. Phase 1
+   * Lazy-init the OpenAI-compat HTTP client for the proxy completion route.
+   * Cached on first use. If init fails, sets `proxyInitFailed` so subsequent
+   * calls hard-fail with a clear message instead of silently retrying. Phase 1
    * rule: no fallback to subprocess on completion-route failure.
    */
-  private async initLitellm(): Promise<void> {
-    if (this.litellm || this.litellmInitFailed) return;
+  private async initProxy(): Promise<void> {
+    if (this.proxy || this.proxyInitFailed) return;
     try {
       const OpenAI = (await import('openai')).default;
-      const apiKey = getLitellmApiKey();
+      const apiKey = getProxyApiKey();
       if (!apiKey) {
-        this.litellmInitFailed = true;
+        this.proxyInitFailed = true;
         throw new Error(
-          'LITELLM_BRAIN_KEY not set. Completion route requires a key. ' +
-          'Set LITELLM_BRAIN_KEY in .env or pass _transport: "subprocess" ' +
+          'PROXY_BRAIN_KEY not set. Completion route requires a key. ' +
+          'Set PROXY_BRAIN_KEY in .env or pass _transport: "subprocess" ' +
           'on the call to use the legacy path.'
         );
       }
-      this.litellm = new OpenAI({
+      this.proxy = new OpenAI({
         apiKey,
-        baseURL: getLitellmBaseUrl(),
+        baseURL: getProxyBaseUrl(),
         maxRetries: 0, // single source of truth lives in withRetry at call sites
       });
-      logger.debug('Initialized LiteLLM completion client', { baseUrl: getLitellmBaseUrl() });
+      logger.debug('Initialized proxy completion client', { baseUrl: getProxyBaseUrl() });
     } catch (err) {
       // Second init-failure path: catches both missing-key throws from the
       // guard above AND unexpected errors (import failure, OpenAI ctor, bad
       // baseURL, etc.). Flag is set so subsequent calls hard-fail immediately
       // without retrying — no silent retry loop on a broken config.
-      this.litellmInitFailed = true;
-      logger.error('LiteLLM client init failed — completion route disabled', { err });
+      this.proxyInitFailed = true;
+      logger.error('Proxy client init failed — completion route disabled', { err });
       throw err;
     }
   }
 
   /**
-   * Phase 1 completion route — LiteLLM HTTP via OpenAI-compatible SDK.
+   * Phase 1 completion route — OpenAI-shape proxy via configurable endpoint.
    *
    * Hard-fail on any error path. No silent fallback to subprocess. The
    * whole point of this route is universal abstraction; falling back
@@ -250,7 +253,7 @@ export class ClaudeClient {
    * Returns the assistant text content as a plain string — same shape
    * existing `complete()` callers consume.
    */
-  private async completeLitellm(prompt: string, opts: CompleteOptions): Promise<string> {
+  private async completeProxy(prompt: string, opts: CompleteOptions): Promise<string> {
     const callSite = opts.callSite || 'unknown';
     const caller = opts.caller || 'unknown';
     const model = opts.model || 'haiku';
@@ -258,17 +261,17 @@ export class ClaudeClient {
     const agentRoot = opts.cwd || getRoot();
     const agentName = deriveAgentName(agentRoot);
 
-    await this.initLitellm();
-    if (!this.litellm) {
-      // initLitellm threw and we caught it above? defensive — should not reach here.
-      throw new Error('LiteLLM client unavailable after initLitellm()');
+    await this.initProxy();
+    if (!this.proxy) {
+      // initProxy threw and we caught it above? defensive — should not reach here.
+      throw new Error('Proxy client unavailable after initProxy()');
     }
 
     const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
     if (opts.system) messages.push({ role: 'system', content: opts.system });
     messages.push({ role: 'user', content: prompt });
 
-    logger.debug('completeLitellm:request', {
+    logger.debug('completeProxy:request', {
       call_site: callSite,
       caller,
       model,
@@ -279,29 +282,27 @@ export class ClaudeClient {
     });
 
     const t0 = Date.now();
-    inFlightLitellmCount++;
+    inFlightProxyCount++;
     try {
       // Phase 1 metadata transport — two surfaces, two jobs:
-      //   metadata.spend_logs_metadata → object persisted to LiteLLM_SpendLogs
+      //   metadata.spend_logs_metadata → object persisted to proxy SpendLogs
       //     (analytics; queryable via /spend/logs by call_site/caller/agent).
       //   metadata.tags                → string[] persisted to request_tags
       //     (budget enforcement via POST /tag/new + max_budget; hard 400 on cap).
       //
       // Sentinel B verified `metadata.spend_logs_metadata` round-trips
-      // verbatim to LiteLLM_SpendLogs.spend_logs_metadata. Top-level
-      // `metadata.{call_site,...}` is silently dropped by the proxy
-      // (Sentinel A failure mode). We forward the nested object via
-      // `extra_body` to stay TS-clean against OpenAI SDK 4.104 (whose
-      // typed `metadata` field is Record<string,string> only) and to
-      // document intent — these are LiteLLM-specific extensions, not
-      // OpenAI fields.
+      // verbatim to spend_logs_metadata. Top-level `metadata.{call_site,...}`
+      // is silently dropped by the proxy (Sentinel A failure mode). We forward
+      // the nested object via `extra_body` to stay TS-clean against OpenAI SDK
+      // 4.104 (whose typed `metadata` field is Record<string,string> only) and
+      // to document intent — these are proxy-specific extensions, not OpenAI fields.
       //
       // `stream: false` is asserted both at the call site (typed false)
-      // and at the response shape — Phase C invariant: completeLitellm()
+      // and at the response shape — Phase C invariant: completeProxy()
       // never streams. If a future caller flips this without rewriting
       // the .choices access path below, the runtime guard catches it
       // before silent breakage. 2-line cost, removes a footgun.
-      const response = await this.litellm.chat.completions.create({
+      const response = await this.proxy.chat.completions.create({
         model,
         messages,
         max_tokens: maxTokens,
@@ -322,7 +323,7 @@ export class ClaudeClient {
       // Phase C non-streaming invariant — guard before .choices access.
       if (response && typeof (response as any)[Symbol.asyncIterator] === 'function') {
         throw new Error(
-          `completeLitellm: unexpected streaming response shape ` +
+          `completeProxy: unexpected streaming response shape ` +
           `(call_site=${callSite}, caller=${caller}). Phase C invariant violated — ` +
           `this path returns a plain string and does not consume async iterators.`
         );
@@ -333,7 +334,7 @@ export class ClaudeClient {
         // Empty/missing content is a hard failure on this path — don't
         // swallow it; callers downstream parse JSON and need a real string.
         const finishReason = response?.choices?.[0]?.finish_reason;
-        logger.error('completeLitellm:empty-content', {
+        logger.error('completeProxy:empty-content', {
           call_site: callSite,
           caller,
           model,
@@ -341,11 +342,11 @@ export class ClaudeClient {
           response_id: response?.id,
         });
         throw new Error(
-          `LiteLLM returned empty content (call_site=${callSite}, finish_reason=${finishReason ?? 'unknown'})`
+          `Proxy returned empty content (call_site=${callSite}, finish_reason=${finishReason ?? 'unknown'})`
         );
       }
 
-      logger.debug('completeLitellm:response', {
+      logger.debug('completeProxy:response', {
         call_site: callSite,
         caller,
         model_requested: model,
@@ -361,7 +362,7 @@ export class ClaudeClient {
     } catch (err: any) {
       // Structured hard-fail. Surface enough fields to diagnose without
       // needing to grep stack traces. Re-throw — never fall back.
-      logger.error('completeLitellm:failure', {
+      logger.error('completeProxy:failure', {
         call_site: callSite,
         caller,
         model,
@@ -378,7 +379,7 @@ export class ClaudeClient {
       // Phase C — decrement on every exit path (success, empty-content
       // throw, network error, runtime guard throw). Pairs with the
       // increment immediately before the create() call.
-      inFlightLitellmCount--;
+      inFlightProxyCount--;
     }
   }
 
@@ -416,10 +417,10 @@ export class ClaudeClient {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Phase 1 LiteLLM dispatch — caller-set OR _transport='completion'
-    // routes to the LiteLLM HTTP path. _transport='subprocess' is an
-    // explicit override that pins to the legacy subprocess path even if
-    // caller is set. opts.subprocess (back-compat) also pins subprocess.
+    // Phase 1 completion-route dispatch — caller-set OR _transport='completion'
+    // routes to the OpenAI-shape proxy. _transport='subprocess' is an explicit
+    // override that pins to the legacy subprocess path even if caller is set.
+    // opts.subprocess (back-compat) also pins subprocess.
     // ──────────────────────────────────────────────────────────────────
     const wantsCompletion =
       opts._transport === 'completion' ||
@@ -436,7 +437,7 @@ export class ClaudeClient {
     }
 
     if (wantsCompletion) {
-      return this.completeLitellm(prompt, opts);
+      return this.completeProxy(prompt, opts);
     }
 
     // All server-process calls should use subprocess for memory isolation.

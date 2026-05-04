@@ -132,8 +132,8 @@ export async function extractRelationships(
     );
 
     // Instrument output length before parse — usage.output_tokens not yet available
-    // on the subprocess path; response.length is the proxy until LiteLLM migration
-    // adds a proper usage object (Phase 1). This log line is the data source for
+    // on the subprocess path; response.length is the proxy until the completion
+    // route adds a proper usage object (Phase 1). This log line is the data source for
     // the Phase 1.5 maxTokens calibration.
     logger.debug('relationship-extractor response received', {
       call_site: 'brain.relationship-extractor',

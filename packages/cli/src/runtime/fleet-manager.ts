@@ -21,6 +21,7 @@ import { startTunnel, getTunnelUrl } from '../services/tunnel.js';
 import { ServiceHandle } from '../types.js';
 import { mountWebUi } from '../server/agent-router.js';
 import { createOrchestrationRouter } from '../server/orchestration-api.js';
+import { getInFlightProxyCount } from '../claude.js';
 
 const logger = createLogger('fleet');
 
@@ -453,6 +454,15 @@ export class FleetManager {
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {
+      // Phase C — Option α instrumentation. Greppable single line:
+      //   grep INFLIGHT_AT_RESTART pm2.log | awk -F'count=' '{print $2}' | awk '{print $1}'
+      // Threshold to promote Phase 1.6 (graceful-drain): ≥5 fleet
+      // restarts in window AND avg in-flight ≥0.5 across them. Below
+      // either, in-flight loss on restart is statistical noise.
+      const inFlight = getInFlightProxyCount();
+      logger.info(
+        `[INFLIGHT_AT_RESTART] count=${inFlight} reason=${signal} ts=${new Date().toISOString()}`
+      );
       logger.info(`Received ${signal}, shutting down fleet...`);
       await this.stop();
       process.exit(0);
