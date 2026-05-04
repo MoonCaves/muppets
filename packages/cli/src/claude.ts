@@ -184,6 +184,141 @@ export class ClaudeClient {
   }
 
   /**
+   * Lazy-init the LiteLLM HTTP client (OpenAI-compat). Cached on first
+   * use. If init fails, sets `litellmInitFailed` so subsequent calls
+   * hard-fail with a clear message instead of silently retrying. Phase 1
+   * rule: no fallback to subprocess on completion-route failure.
+   */
+  private async initLitellm(): Promise<void> {
+    if (this.litellm || this.litellmInitFailed) return;
+    try {
+      const OpenAI = (await import('openai')).default;
+      const apiKey = getLitellmApiKey();
+      if (!apiKey) {
+        this.litellmInitFailed = true;
+        throw new Error(
+          'LITELLM_BRAIN_KEY not set. Completion route requires a key. ' +
+          'Set LITELLM_BRAIN_KEY in .env or pass _transport: "subprocess" ' +
+          'on the call to use the legacy path.'
+        );
+      }
+      this.litellm = new OpenAI({
+        apiKey,
+        baseURL: getLitellmBaseUrl(),
+        maxRetries: 0, // single source of truth lives in withRetry at call sites
+      });
+      logger.debug('Initialized LiteLLM completion client', { baseUrl: getLitellmBaseUrl() });
+    } catch (err) {
+      this.litellmInitFailed = true;
+      throw err;
+    }
+  }
+
+  /**
+   * Phase 1 completion route — LiteLLM HTTP via OpenAI-compatible SDK.
+   *
+   * Hard-fail on any error path. No silent fallback to subprocess. The
+   * whole point of this route is universal abstraction; falling back
+   * masks regressions and re-creates the silent-cap-exit failure mode
+   * we are migrating away from.
+   *
+   * Returns the assistant text content as a plain string — same shape
+   * existing `complete()` callers consume.
+   */
+  private async completeLitellm(prompt: string, opts: CompleteOptions): Promise<string> {
+    const callSite = opts.callSite || 'unknown';
+    const caller = opts.caller || 'unknown';
+    const model = opts.model || 'haiku';
+    const maxTokens = opts.maxTokens || 4096;
+    const agentRoot = opts.cwd || getRoot();
+    const agentName = deriveAgentName(agentRoot);
+
+    await this.initLitellm();
+    if (!this.litellm) {
+      // initLitellm threw and we caught it above? defensive — should not reach here.
+      throw new Error('LiteLLM client unavailable after initLitellm()');
+    }
+
+    const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+    if (opts.system) messages.push({ role: 'system', content: opts.system });
+    messages.push({ role: 'user', content: prompt });
+
+    logger.debug('completeLitellm:request', {
+      call_site: callSite,
+      caller,
+      model,
+      max_tokens: maxTokens,
+      agent_root: agentRoot,
+      agent_name: agentName,
+      has_system: !!opts.system,
+    });
+
+    const t0 = Date.now();
+    try {
+      // metadata round-trip — LiteLLM forwards arbitrary metadata to its
+      // logging/callback layer. Keys per Phase 1 spec.
+      const response = await this.litellm.chat.completions.create({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        metadata: {
+          agent_root: agentRoot,
+          agent_name: agentName,
+          call_site: callSite,
+          caller,
+        },
+      });
+
+      const text = response?.choices?.[0]?.message?.content;
+      if (typeof text !== 'string' || text.length === 0) {
+        // Empty/missing content is a hard failure on this path — don't
+        // swallow it; callers downstream parse JSON and need a real string.
+        const finishReason = response?.choices?.[0]?.finish_reason;
+        logger.error('completeLitellm:empty-content', {
+          call_site: callSite,
+          caller,
+          model,
+          finish_reason: finishReason,
+          response_id: response?.id,
+        });
+        throw new Error(
+          `LiteLLM returned empty content (call_site=${callSite}, finish_reason=${finishReason ?? 'unknown'})`
+        );
+      }
+
+      logger.debug('completeLitellm:response', {
+        call_site: callSite,
+        caller,
+        model_requested: model,
+        model_returned: response.model,
+        response_length: text.length,
+        prompt_tokens: response.usage?.prompt_tokens,
+        completion_tokens: response.usage?.completion_tokens,
+        total_tokens: response.usage?.total_tokens,
+        latency_ms: Date.now() - t0,
+      });
+
+      return text;
+    } catch (err: any) {
+      // Structured hard-fail. Surface enough fields to diagnose without
+      // needing to grep stack traces. Re-throw — never fall back.
+      logger.error('completeLitellm:failure', {
+        call_site: callSite,
+        caller,
+        model,
+        agent_root: agentRoot,
+        agent_name: agentName,
+        latency_ms: Date.now() - t0,
+        error_message: err?.message,
+        error_status: err?.status,
+        error_type: err?.type ?? err?.code ?? err?.name,
+        error_param: err?.param,
+      });
+      throw err;
+    }
+  }
+
+  /**
    * Single completion — fire and forget prompt
    */
   async complete(prompt: string, opts: CompleteOptions = {}): Promise<string> {
@@ -214,6 +349,30 @@ export class ClaudeClient {
       } else {
         opts.model = (getClaudeModel() || 'opus') as 'haiku' | 'sonnet' | 'opus';
       }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Phase 1 LiteLLM dispatch — caller-set OR _transport='completion'
+    // routes to the LiteLLM HTTP path. _transport='subprocess' is an
+    // explicit override that pins to the legacy subprocess path even if
+    // caller is set. opts.subprocess (back-compat) also pins subprocess.
+    // ──────────────────────────────────────────────────────────────────
+    const wantsCompletion =
+      opts._transport === 'completion' ||
+      (opts.caller !== undefined && opts._transport !== 'subprocess' && !opts.subprocess);
+
+    if (opts._transport === 'subprocess' || (opts.subprocess && !wantsCompletion)) {
+      // Explicit legacy pin; emit the warn the spec asks for so we can see drift.
+      if (opts._transport === 'subprocess') {
+        logger.warn('claude._transport override → subprocess', {
+          callSite: opts.callSite,
+          caller: opts.caller,
+        });
+      }
+    }
+
+    if (wantsCompletion) {
+      return this.completeLitellm(prompt, opts);
     }
 
     // All server-process calls should use subprocess for memory isolation.
