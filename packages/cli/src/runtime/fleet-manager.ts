@@ -22,6 +22,7 @@ import { ServiceHandle } from '../types.js';
 import { mountWebUi } from '../server/agent-router.js';
 import { createOrchestrationRouter } from '../server/orchestration-api.js';
 import { getInFlightProxyCount } from '../claude.js';
+import { getOrchestrationSettings } from '../orchestration/settings.js';
 
 const logger = createLogger('fleet');
 
@@ -110,6 +111,48 @@ export class FleetManager {
    */
   async start(port: number = 3456): Promise<void> {
     this.startedAt = Date.now();
+
+    // ── Orch guard ─────────────────────────────────────────────────────────────
+    // Hard-fail if orchestration_enabled === true but ceo_model / worker_model
+    // are unset or set to 'sonnet'. Sonnet with maxTurns 15/25 is unsafe for
+    // orchestration reasoning tasks — it fails silently rather than refusing
+    // to complete work, which creates ghost-progress that looks like success.
+    //
+    // Guard fires:  orch on  + any model unset or 'sonnet'
+    // Guard silent: orch off, regardless of model fields
+    // Guard silent: orch on  + both models set to 'opus' (or any non-sonnet value)
+    //
+    // [ORCH_CONFIG] logs on every fleet start — greppable startup canary.
+    // Grep: grep ORCH_CONFIG kyberbot.log
+    {
+      const orchSettings = getOrchestrationSettings();
+      const { orchestration_enabled, ceo_model, worker_model } = orchSettings;
+
+      // Startup log — every fleet start, regardless of orch state.
+      logger.info(
+        `[ORCH_CONFIG] orchestration_enabled=${orchestration_enabled} ` +
+        `ceo_model=${ceo_model ?? 'null'} worker_model=${worker_model ?? 'null'} ` +
+        `ts=${new Date().toISOString()}`
+      );
+
+      if (orchestration_enabled) {
+        const unsafeModels = new Set(['sonnet', null, undefined]);
+        const ceoUnsafe = unsafeModels.has(ceo_model as any);
+        const workerUnsafe = unsafeModels.has(worker_model as any);
+
+        if (ceoUnsafe || workerUnsafe) {
+          const bad: string[] = [];
+          if (ceoUnsafe) bad.push(`ceo_model=${JSON.stringify(ceo_model)} (must be 'opus')`);
+          if (workerUnsafe) bad.push(`worker_model=${JSON.stringify(worker_model)} (must be 'opus')`);
+          throw new Error(
+            `[ORCH_GUARD] Fleet startup aborted — orchestration is enabled but model config is unsafe.\n` +
+            `  ${bad.join('\n  ')}\n` +
+            `Fix: set ceo_model and worker_model to 'opus' via \`kyberbot orch settings\` ` +
+            `or disable orchestration with \`kyberbot orch off\`.`
+          );
+        }
+      }
+    }
 
     // Start each agent's services (heartbeat, channels, embeddings)
     for (const [name, agent] of this.agents) {

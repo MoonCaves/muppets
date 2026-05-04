@@ -193,4 +193,16 @@ export interface OrchestrationSettings {
   orchestration_enabled: boolean;
   heartbeat_interval: string;
   active_hours: { start: string; end: string } | null;
+  /**
+   * Model used for CEO orchestration heartbeats. Must be 'opus' (or a future
+   * model validated for long-context reasoning) when orchestration_enabled is true.
+   * NULL means "not configured" — the orch guard treats NULL as a missing value
+   * and hard-fails fleet startup to prevent running orch on an unsafe model.
+   */
+  ceo_model: string | null;
+  /**
+   * Model used for worker (issue-execution) heartbeats. Same safety constraint
+   * as ceo_model. NULL means "not configured".
+   */
+  worker_model: string | null;
 }

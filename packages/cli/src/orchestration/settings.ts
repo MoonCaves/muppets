@@ -19,9 +19,11 @@ export function getOrchestrationSettings(): OrchestrationSettings {
     heartbeat_interval: string;
     active_hours_start: string | null;
     active_hours_end: string | null;
+    ceo_model: string | null;
+    worker_model: string | null;
   }
   const row = db.prepare(
-    'SELECT orchestration_enabled, heartbeat_interval, active_hours_start, active_hours_end FROM orchestration_settings WHERE id = 1'
+    'SELECT orchestration_enabled, heartbeat_interval, active_hours_start, active_hours_end, ceo_model, worker_model FROM orchestration_settings WHERE id = 1'
   ).get() as SettingsRow;
 
   return {
@@ -30,6 +32,8 @@ export function getOrchestrationSettings(): OrchestrationSettings {
     active_hours: row.active_hours_start && row.active_hours_end
       ? { start: row.active_hours_start, end: row.active_hours_end }
       : null,
+    ceo_model: row.ceo_model ?? null,
+    worker_model: row.worker_model ?? null,
   };
 }
 
@@ -60,6 +64,14 @@ export function updateOrchestrationSettings(updates: Partial<OrchestrationSettin
       fields.push('active_hours_end = ?');
       params.push(updates.active_hours.end);
     }
+  }
+  if (updates.ceo_model !== undefined) {
+    fields.push('ceo_model = ?');
+    params.push(updates.ceo_model);
+  }
+  if (updates.worker_model !== undefined) {
+    fields.push('worker_model = ?');
+    params.push(updates.worker_model);
   }
 
   if (fields.length > 0) {

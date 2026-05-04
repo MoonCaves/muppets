@@ -33,13 +33,26 @@ export function getOrchDb(): Database.Database {
     conn.exec(SCHEMA);
 
     // Migrations for existing databases — check column existence before altering
-    const columns = conn.prepare("PRAGMA table_info(heartbeat_runs)").all() as Array<{name: string}>;
-    const columnNames = new Set(columns.map(c => c.name));
-    if (!columnNames.has('log_output')) {
+    const runColumns = conn.prepare("PRAGMA table_info(heartbeat_runs)").all() as Array<{name: string}>;
+    const runColumnNames = new Set(runColumns.map(c => c.name));
+    if (!runColumnNames.has('log_output')) {
       conn.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_output TEXT');
     }
-    if (!columnNames.has('log_ref')) {
+    if (!runColumnNames.has('log_ref')) {
       conn.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_ref TEXT');
+    }
+
+    // orchestration_settings migration — add ceo_model / worker_model for orch guard.
+    // Both are nullable; NULL means "not set" → guard treats as missing.
+    // Dual-write pattern: existing installs gain the columns transparently;
+    // the orch guard checks them before activating orch heartbeats.
+    const settingsColumns = conn.prepare("PRAGMA table_info(orchestration_settings)").all() as Array<{name: string}>;
+    const settingsColumnNames = new Set(settingsColumns.map(c => c.name));
+    if (!settingsColumnNames.has('ceo_model')) {
+      conn.exec('ALTER TABLE orchestration_settings ADD COLUMN ceo_model TEXT');
+    }
+    if (!settingsColumnNames.has('worker_model')) {
+      conn.exec('ALTER TABLE orchestration_settings ADD COLUMN worker_model TEXT');
     }
   } catch (err) {
     // Close and rethrow — do NOT cache a broken connection
