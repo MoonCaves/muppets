@@ -108,7 +108,10 @@ export async function extractRelationships(
   } = {}
 ): Promise<RelationshipExtractionResult> {
   const client = getClaudeClient();
-  const maxTokens = options.maxTokens || 1024;
+  // Interim conservative ceiling; precision deferred to Phase 1.5 soak data.
+  // Observed relationship counts top out at ~10; 1500 gives headroom for
+  // verbose rationale fields without the silent 1024 truncation risk.
+  const maxTokens = options.maxTokens || 1500;
 
   try {
     // Truncate very long texts
@@ -127,6 +130,16 @@ export async function extractRelationships(
         cwd: options.cwd,
       }
     );
+
+    // Instrument output length before parse — usage.output_tokens not yet available
+    // on the subprocess path; response.length is the proxy until LiteLLM migration
+    // adds a proper usage object (Phase 1). This log line is the data source for
+    // the Phase 1.5 maxTokens calibration.
+    logger.debug('relationship-extractor response received', {
+      call_site: 'brain.relationship-extractor',
+      response_length: response.length,
+      max_tokens: maxTokens,
+    });
 
     // Parse JSON from response
     const jsonMatch = response.match(/\{[\s\S]*\}/);
