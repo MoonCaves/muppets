@@ -141,7 +141,7 @@ function getProxyBaseUrl(): string {
     );
     return process.env.LITELLM_BRAIN_URL;
   }
-  return 'https://ai-api.remotelyhuman.com/v1';
+  return 'http://localhost:4000/v1';
 }
 
 /**
