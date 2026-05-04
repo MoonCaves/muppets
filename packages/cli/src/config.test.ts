@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { parseDuration } from './config.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { parseDuration, resolveOrchModelFromIdentity, _resetOrchDeprecationFlag } from './config.js';
+import type { IdentityConfig } from './types.js';
+
+const baseId = (overrides: Partial<IdentityConfig> = {}): IdentityConfig => ({
+  agent_name: 'test-agent',
+  timezone: 'UTC',
+  heartbeat_interval: '1h',
+  ...overrides,
+});
 
 describe('parseDuration', () => {
   it('should parse seconds', () => {
@@ -31,5 +39,37 @@ describe('parseDuration', () => {
     expect(() => parseDuration('30')).toThrow('Invalid duration');
     expect(() => parseDuration('30x')).toThrow('Invalid duration');
     expect(() => parseDuration('m30')).toThrow('Invalid duration');
+  });
+});
+
+describe('resolveOrchModelFromIdentity', () => {
+  beforeEach(() => _resetOrchDeprecationFlag());
+
+  it('back-compat: only heartbeat_model set → falls back to legacy field', () => {
+    const id = baseId({ heartbeat_model: 'opus' });
+    expect(resolveOrchModelFromIdentity(id, 'ceo_model')).toBe('opus');
+    expect(resolveOrchModelFromIdentity(id, 'worker_model')).toBe('opus');
+  });
+
+  it('forward-compat: ceo/worker_model set → uses new explicit fields', () => {
+    const id = baseId({ ceo_model: 'opus', worker_model: 'haiku' });
+    expect(resolveOrchModelFromIdentity(id, 'ceo_model')).toBe('opus');
+    expect(resolveOrchModelFromIdentity(id, 'worker_model')).toBe('haiku');
+  });
+
+  it('new wins over legacy: both present, explicit takes precedence', () => {
+    const id = baseId({
+      heartbeat_model: 'sonnet',
+      ceo_model: 'opus',
+      worker_model: 'opus',
+    });
+    expect(resolveOrchModelFromIdentity(id, 'ceo_model')).toBe('opus');
+    expect(resolveOrchModelFromIdentity(id, 'worker_model')).toBe('opus');
+  });
+
+  it('nothing set: returns sonnet default', () => {
+    const id = baseId();
+    expect(resolveOrchModelFromIdentity(id, 'ceo_model')).toBe('sonnet');
+    expect(resolveOrchModelFromIdentity(id, 'worker_model')).toBe('sonnet');
   });
 });

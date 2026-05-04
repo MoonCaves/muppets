@@ -332,12 +332,12 @@ export async function runCeoHeartbeat(root: string, agentName: string): Promise<
     const prompt = buildCeoHeartbeatPrompt(agentName);
 
     const client = getClaudeClient();
-    const { getHeartbeatModelForRoot } = await import('../config.js');
+    const { getCeoModelForRoot } = await import('../config.js');
     const result = await client.complete(prompt, {
       maxTurns: 15,
       subprocess: true,
       cwd: root,
-      model: getHeartbeatModelForRoot(root),
+      model: getCeoModelForRoot(root),
       onChunk: (chunk) => appendRunLog(runId, chunk),
       system: [
         `You are ${agentName}, the CEO orchestrator for this company.`,

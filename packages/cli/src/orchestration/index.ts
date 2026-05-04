@@ -62,3 +62,6 @@ export { queueWorkerHeartbeat, queueCeoHeartbeat } from './worker-heartbeat.js';
 
 // Orchestration Settings
 export { getOrchestrationSettings, updateOrchestrationSettings } from './settings.js';
+
+// Startup guard
+export { assertOrchConfig, OrchConfigError } from './guard.js';

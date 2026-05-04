@@ -38,8 +38,23 @@ export interface IdentityConfig {
    * Defaults to 'sonnet' if unset — heartbeat is tool-use orchestration,
    * not deep reasoning, so running Opus there is wasteful. The agent's
    * main chat still uses `claude.model` (Opus by default).
+   *
+   * @deprecated for orchestration paths. Set `ceo_model` and `worker_model`
+   * instead. Falls back here only for backward compatibility — emits a
+   * one-time `[ORCH_CONFIG]` deprecation log when the legacy path is taken.
    */
   heartbeat_model?: 'haiku' | 'sonnet' | 'opus';
+  /**
+   * Model used for the CEO orchestration heartbeat. Should be Opus-class
+   * for reasoning-heavy planning. The fleet-startup guard rejects 'sonnet'
+   * and 'haiku' when orchestration is enabled — only 'opus' is accepted.
+   */
+  ceo_model?: 'haiku' | 'sonnet' | 'opus';
+  /**
+   * Model used for the worker orchestration heartbeat (issue execution).
+   * Same guard rules as `ceo_model` — must be 'opus' when orch is enabled.
+   */
+  worker_model?: 'haiku' | 'sonnet' | 'opus';
   server?: {
     port: number;
     host?: string;

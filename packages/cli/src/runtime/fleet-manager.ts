@@ -22,7 +22,7 @@ import { ServiceHandle } from '../types.js';
 import { mountWebUi } from '../server/agent-router.js';
 import { createOrchestrationRouter } from '../server/orchestration-api.js';
 import { getInFlightProxyCount } from '../claude.js';
-import { getOrchestrationSettings } from '../orchestration/settings.js';
+import { getOrchestrationSettings, assertOrchConfig } from '../orchestration/index.js';
 
 const logger = createLogger('fleet');
 
@@ -113,46 +113,12 @@ export class FleetManager {
     this.startedAt = Date.now();
 
     // ── Orch guard ─────────────────────────────────────────────────────────────
-    // Hard-fail if orchestration_enabled === true but ceo_model / worker_model
-    // are unset or set to 'sonnet'. Sonnet with maxTurns 15/25 is unsafe for
-    // orchestration reasoning tasks — it fails silently rather than refusing
-    // to complete work, which creates ghost-progress that looks like success.
-    //
-    // Guard fires:  orch on  + any model unset or 'sonnet'
-    // Guard silent: orch off, regardless of model fields
-    // Guard silent: orch on  + both models set to 'opus' (or any non-sonnet value)
-    //
-    // [ORCH_CONFIG] logs on every fleet start — greppable startup canary.
+    // Per-agent check: reads identity.yaml fields directly (NOT the resolver
+    // fallback chain). Emits one [ORCH_CONFIG] log line per agent on every
+    // fleet start. Hard-fails if orch is enabled and any agent lacks opus for
+    // ceo_model / worker_model. See orchestration/guard.ts for full rationale.
     // Grep: grep ORCH_CONFIG kyberbot.log
-    {
-      const orchSettings = getOrchestrationSettings();
-      const { orchestration_enabled, ceo_model, worker_model } = orchSettings;
-
-      // Startup log — every fleet start, regardless of orch state.
-      logger.info(
-        `[ORCH_CONFIG] orchestration_enabled=${orchestration_enabled} ` +
-        `ceo_model=${ceo_model ?? 'null'} worker_model=${worker_model ?? 'null'} ` +
-        `ts=${new Date().toISOString()}`
-      );
-
-      if (orchestration_enabled) {
-        const unsafeModels = new Set(['sonnet', null, undefined]);
-        const ceoUnsafe = unsafeModels.has(ceo_model as any);
-        const workerUnsafe = unsafeModels.has(worker_model as any);
-
-        if (ceoUnsafe || workerUnsafe) {
-          const bad: string[] = [];
-          if (ceoUnsafe) bad.push(`ceo_model=${JSON.stringify(ceo_model)} (must be 'opus')`);
-          if (workerUnsafe) bad.push(`worker_model=${JSON.stringify(worker_model)} (must be 'opus')`);
-          throw new Error(
-            `[ORCH_GUARD] Fleet startup aborted — orchestration is enabled but model config is unsafe.\n` +
-            `  ${bad.join('\n  ')}\n` +
-            `Fix: set ceo_model and worker_model to 'opus' via \`kyberbot orch settings\` ` +
-            `or disable orchestration with \`kyberbot orch off\`.`
-          );
-        }
-      }
-    }
+    this.runOrchStartupChecks();
 
     // Start each agent's services (heartbeat, channels, embeddings)
     for (const [name, agent] of this.agents) {
@@ -513,6 +479,30 @@ export class FleetManager {
 
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
+  }
+
+  /**
+   * Per-agent orch config guard. Reads fleet-wide orchestration_enabled from
+   * the DB settings row, then reads each agent's identity.yaml fields directly
+   * (NOT the resolver fallback chain — see guard.ts for why). Emits one
+   * [ORCH_CONFIG] log line per agent on every fleet start. Throws via
+   * assertOrchConfig if orch is enabled and any agent is misconfigured.
+   *
+   * Runs BEFORE agent.start() so no timers/listeners are registered if it throws.
+   * Grep: grep ORCH_CONFIG kyberbot.log
+   */
+  private runOrchStartupChecks(): void {
+    const orch = getOrchestrationSettings();
+    for (const [name, agent] of this.agents) {
+      const id = agent.identity;
+      logger.info(
+        `[ORCH_CONFIG] agent=${name} orchestration_enabled=${orch.orchestration_enabled} ` +
+          `ceo_model=${id.ceo_model ?? 'unset'} ` +
+          `worker_model=${id.worker_model ?? 'unset'} ` +
+          `heartbeat_model=${id.heartbeat_model ?? 'unset'}`
+      );
+      assertOrchConfig(name, id, orch.orchestration_enabled, agent.root);
+    }
   }
 
   /**

@@ -183,14 +183,14 @@ export async function runWorkerHeartbeat(
     // Step 3: Run Claude to do the actual work (stream output to log file)
     setCurrentIssueId(targetIssue.id);
     const client = getClaudeClient();
-    const { getHeartbeatModelForRoot } = await import('../config.js');
+    const { getWorkerModelForRoot } = await import('../config.js');
     let result: string;
     try {
       result = await client.complete(prompt, {
         maxTurns: 25,
         subprocess: true,
         cwd: root,
-        model: getHeartbeatModelForRoot(root),
+        model: getWorkerModelForRoot(root),
         onChunk: (chunk) => appendRunLog(runId, chunk),
       });
 

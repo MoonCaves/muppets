@@ -213,6 +213,62 @@ export function getHeartbeatModel(): 'haiku' | 'sonnet' | 'opus' {
   return 'sonnet';
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ORCH MODEL RESOLUTION (ceo_model / worker_model with heartbeat_model fallback)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _orchDeprecationLogged = false;
+
+/** Test-only: reset the one-time deprecation log flag. */
+export function _resetOrchDeprecationFlag(): void { _orchDeprecationLogged = false; }
+
+/**
+ * Pure resolver — given an IdentityConfig, return the model for the requested
+ * orch path. Priority:
+ *   1. Explicit ceo_model / worker_model (per-field, new)
+ *   2. Legacy heartbeat_model (with one-time deprecation log)
+ *   3. 'sonnet' (final default — preserves pre-orch behavior)
+ *
+ * Pure (no I/O) — testable without a real identity.yaml.
+ *
+ * Note: this resolver is intentionally more lenient than the orch guard.
+ * The guard reads raw identity fields and rejects everything except 'opus'.
+ * This resolver allows any valid model value (including 'sonnet') to
+ * support non-orch heartbeat callers and backward compat. The guard fires
+ * BEFORE the resolver is ever called in production.
+ */
+export function resolveOrchModelFromIdentity(
+  identity: import('./types.js').IdentityConfig,
+  field: 'ceo_model' | 'worker_model'
+): 'haiku' | 'sonnet' | 'opus' {
+  const explicit = identity[field];
+  if (explicit === 'haiku' || explicit === 'sonnet' || explicit === 'opus') {
+    return explicit;
+  }
+  const legacy = identity.heartbeat_model;
+  if (legacy === 'haiku' || legacy === 'sonnet' || legacy === 'opus') {
+    if (!_orchDeprecationLogged) {
+      console.info(
+        '[ORCH_CONFIG] heartbeat_model is deprecated for orch paths — ' +
+        'set ceo_model and worker_model in identity.yaml'
+      );
+      _orchDeprecationLogged = true;
+    }
+    return legacy;
+  }
+  return 'sonnet';
+}
+
+export function getCeoModelForRoot(root: string): 'haiku' | 'sonnet' | 'opus' {
+  try { return resolveOrchModelFromIdentity(getIdentityForRoot(root), 'ceo_model'); }
+  catch { return 'sonnet'; }
+}
+
+export function getWorkerModelForRoot(root: string): 'haiku' | 'sonnet' | 'opus' {
+  try { return resolveOrchModelFromIdentity(getIdentityForRoot(root), 'worker_model'); }
+  catch { return 'sonnet'; }
+}
+
 /**
  * Parse a duration string like "30m", "1h", "5m" into milliseconds
  */
