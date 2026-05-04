@@ -599,13 +599,15 @@ export function createOrchestrationRouter(
         const result = await runCeoHeartbeat(identity.root, orgNode.agent_name);
         res.json({ ok: true, result });
       } else {
-        const result = await runWorkerHeartbeat(
+        const workerResult = await runWorkerHeartbeat(
           identity.root,
           orgNode.agent_name,
           orgNode.role,
           orgNode.title || orgNode.agent_name,
         );
-        res.json({ ok: true, result });
+        // Keep `result` as the summary string for backward compat;
+        // expose the parsed `status` for newer consumers.
+        res.json({ ok: true, result: workerResult.summary, status: workerResult.status });
       }
     } catch (err) {
       logger.error('Manual heartbeat trigger failed', { agent: agentKey, error: String(err) });

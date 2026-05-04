@@ -82,4 +82,40 @@ export interface IdentityConfig {
     enabled?: boolean;
     extensions?: string[];
   }>;
+  /**
+   * Symphony §8.5 stall timeout — a heartbeat run is killed if it goes
+   * this many ms without a phase transition. Default 5 minutes.
+   * Set to 0 to disable stall detection.
+   */
+  heartbeat_stall_timeout_ms?: number;
+  /**
+   * Shell hooks fired around the worker run lifecycle. Scripts run as
+   * `bash -lc <script>` in the agent's root with KYBERBOT_ISSUE_ID,
+   * KYBERBOT_AGENT, and KYBERBOT_RUN_STATUS env vars.
+   */
+  hooks?: {
+    after_create?: string;
+    before_run?: string;
+    after_run?: string;
+    before_remove?: string;
+    timeout_ms?: number;
+  };
+  /**
+   * Per-agent concurrency limits. `max_concurrent_runs` caps the number
+   * of simultaneously running heartbeats for this agent. `max_by_state`
+   * caps the number of issues this agent will work in each issue state
+   * (e.g. `{ todo: 3, in_progress: 1 }`). Both default to 1.
+   */
+  concurrency?: {
+    max_concurrent_runs?: number;
+    max_by_state?: Record<string, number>;
+  };
+  /**
+   * Symphony §7.1 worker-loop limit. After each turn that ends with
+   * STATUS: IN_PROGRESS, the worker re-prompts the agent with the tail
+   * of its previous output as context, up to this many turns within a
+   * single run. Defaults to 5. Set to 1 to disable the loop. Inner Claude
+   * SDK turns (tool-use rounds within one call) are unaffected.
+   */
+  worker_max_turns?: number;
 }

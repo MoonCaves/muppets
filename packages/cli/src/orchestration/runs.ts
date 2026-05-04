@@ -14,6 +14,7 @@ import { homedir } from 'os';
 import { mkdirSync, existsSync, appendFileSync, readFileSync, statSync } from 'fs';
 import { createLogger } from '../logger.js';
 import type { HeartbeatRun, HeartbeatRunType } from './types.js';
+import { transitionPhase, RunPhase } from './run-phases.js';
 
 const logger = createLogger('orch-runs');
 
@@ -95,6 +96,7 @@ export function completeRun(
   data: { result_summary?: string; tool_calls_json?: string; log_output?: string },
 ): void {
   const db = getOrchDb();
+  transitionPhase(id, RunPhase.Succeeded);
   db.prepare(`
     UPDATE heartbeat_runs
     SET status = 'completed',
@@ -130,8 +132,9 @@ export function completeRun(
 /**
  * Mark a run as failed with an error message.
  */
-export function failRun(id: number, error: string): void {
+export function failRun(id: number, error: string, terminalPhase: RunPhase = RunPhase.Failed): void {
   const db = getOrchDb();
+  transitionPhase(id, terminalPhase, error.slice(0, 200));
   db.prepare(`
     UPDATE heartbeat_runs
     SET status = 'failed',
@@ -180,7 +183,7 @@ export function listRuns(filters: RunFilters = {}): HeartbeatRun[] {
   const limit = filters.limit || 50;
 
   return db.prepare(
-    `SELECT id, agent_name, type, status, started_at, finished_at, prompt_summary, result_summary, tool_calls_json, error FROM heartbeat_runs ${where} ORDER BY started_at DESC LIMIT ?`
+    `SELECT id, agent_name, type, status, started_at, finished_at, prompt_summary, result_summary, tool_calls_json, error, phase, phase_history FROM heartbeat_runs ${where} ORDER BY started_at DESC LIMIT ?`
   ).all(...params, limit) as HeartbeatRun[];
 }
 

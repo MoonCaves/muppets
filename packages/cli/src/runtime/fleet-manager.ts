@@ -21,6 +21,7 @@ import { startTunnel, getTunnelUrl } from '../services/tunnel.js';
 import { ServiceHandle } from '../types.js';
 import { mountWebUi } from '../server/agent-router.js';
 import { createOrchestrationRouter } from '../server/orchestration-api.js';
+import { createApiV1Router } from '../server/api/v1/router.js';
 
 const logger = createLogger('fleet');
 
@@ -276,6 +277,35 @@ export class FleetManager {
     }
     this.app.use('/fleet/orch', createOrchestrationRouter(agentIdentities));
     logger.info('Orchestration API mounted at /fleet/orch');
+
+    // Symphony-style snapshot API
+    this.app.use('/api/v1', createApiV1Router({
+      listAgents: () => {
+        const localStatuses = this.getAllStatuses();
+        const remote = this.bus.getRemoteAgentNames().map(name => {
+          const config = this.bus.getRemoteAgentConfig(name);
+          return {
+            name,
+            description: null,
+            type: 'remote' as const,
+            status: (config?.online ? 'running' : 'unreachable') as 'running' | 'unreachable',
+            root: null,
+            uptime_ms: 0,
+          };
+        });
+        const local = localStatuses.map(s => ({
+          name: s.name,
+          description: this.agents.get(s.name)?.identity.agent_description ?? null,
+          type: 'local' as const,
+          status: s.status as 'running' | 'starting' | 'stopped' | 'error',
+          root: s.root,
+          uptime_ms: s.uptime,
+        }));
+        return [...local, ...remote];
+      },
+      getFleetStartedAt: () => this.startedAt,
+    }));
+    logger.info('Snapshot API mounted at /api/v1');
 
     // Mount web UI BEFORE auth — browsers don't send Bearer tokens on page loads
     mountWebUi(this.app, ''); // root UI

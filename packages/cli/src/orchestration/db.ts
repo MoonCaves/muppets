@@ -41,6 +41,29 @@ export function getOrchDb(): Database.Database {
     if (!columnNames.has('log_ref')) {
       conn.exec('ALTER TABLE heartbeat_runs ADD COLUMN log_ref TEXT');
     }
+    if (!columnNames.has('phase')) {
+      // Existing rows are terminal — backfill as 'succeeded'/'failed' based on status
+      conn.exec(`
+        ALTER TABLE heartbeat_runs ADD COLUMN phase TEXT;
+        UPDATE heartbeat_runs SET phase = CASE
+          WHEN status = 'completed' THEN 'succeeded'
+          WHEN status = 'failed' THEN 'failed'
+          ELSE NULL
+        END WHERE phase IS NULL;
+      `);
+    }
+    if (!columnNames.has('phase_history')) {
+      conn.exec("ALTER TABLE heartbeat_runs ADD COLUMN phase_history TEXT NOT NULL DEFAULT '[]'");
+    }
+    // Issue refresh tracking — Phase 3 reconciliation reads these
+    const issueColumns = conn.prepare("PRAGMA table_info(issues)").all() as Array<{name: string}>;
+    const issueColumnNames = new Set(issueColumns.map(c => c.name));
+    if (!issueColumnNames.has('last_synced_at')) {
+      conn.exec('ALTER TABLE issues ADD COLUMN last_synced_at TEXT');
+    }
+    if (!issueColumnNames.has('external_source')) {
+      conn.exec('ALTER TABLE issues ADD COLUMN external_source TEXT');
+    }
   } catch (err) {
     // Close and rethrow — do NOT cache a broken connection
     try { conn.close(); } catch { /* ignore */ }
@@ -230,7 +253,9 @@ const SCHEMA = `
     result_summary TEXT,
     tool_calls_json TEXT,
     error TEXT,
-    log_output TEXT
+    log_output TEXT,
+    phase TEXT,
+    phase_history TEXT NOT NULL DEFAULT '[]'
   );
   CREATE INDEX IF NOT EXISTS idx_runs_agent ON heartbeat_runs(agent_name);
   CREATE INDEX IF NOT EXISTS idx_runs_time ON heartbeat_runs(started_at DESC);

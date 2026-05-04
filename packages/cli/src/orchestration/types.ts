@@ -183,6 +183,10 @@ export interface HeartbeatRun {
   error: string | null;
   log_output: string | null;
   log_ref: string | null;
+  /** Symphony-style run-attempt phase. See run-phases.ts. */
+  phase: string | null;
+  /** JSON-encoded list of {phase, at, reason?} entries. */
+  phase_history: string | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -16,7 +16,11 @@ import {
   listIssues, getComments, checkoutIssue, transitionIssue, addComment,
 } from './index.js';
 import { createRun, completeRun, failRun, appendRunLog, countRecentFailures } from './runs.js';
+import { transitionPhase, RunPhase } from './run-phases.js';
+import { canDispatch, type ConcurrencyConfig } from './reconcile.js';
+import { runConfiguredHook, isFatalHook, type HooksConfig } from '../runtime/hooks.js';
 import { getClaudeClient } from '../claude.js';
+import { getIdentityForRoot } from '../config.js';
 import { setCurrentIssueId } from './tools.js';
 import type { Issue } from './types.js';
 
@@ -29,6 +33,21 @@ const logger = createLogger('worker-heartbeat');
 const heartbeatQueue: Array<() => Promise<void>> = [];
 let isProcessing = false;
 const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max per heartbeat
+
+// Symphony §8.4: a clean worker exit with the issue still in_progress
+// schedules a fresh worker session this many ms later. The spec hardcodes
+// 1000ms; we match.
+const CONTINUATION_RETRY_MS = 1000;
+
+/**
+ * Outcome of one runWorkerHeartbeat call. `status` is `'noop'` when no
+ * dispatch happened (no work, concurrency gate, etc.) and otherwise
+ * reflects the parsed STATUS line of the agent's final turn.
+ */
+export interface WorkerRunResult {
+  summary: string;
+  status: 'noop' | 'done' | 'in_review' | 'blocked' | 'in_progress';
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timerId: ReturnType<typeof setTimeout>;
@@ -65,6 +84,14 @@ async function processQueue(): Promise<void> {
  * Queue a worker heartbeat for serial execution. If another heartbeat is
  * already running, the new one waits until the current one finishes.
  * Fire-and-forget — does not return a result.
+ *
+ * Symphony §8.4 post-exit continuation: when a run exits cleanly with
+ * status='in_progress' (i.e. the inner worker loop hit `worker_max_turns`
+ * without reaching a terminal STATUS), schedule a fresh worker session
+ * 1s later instead of waiting for the next heartbeat tick. The chain
+ * naturally terminates when the agent emits DONE/IN_REVIEW/BLOCKED, when
+ * the issue moves out from under the agent (CEO reassigns, external
+ * source cancels via reconcile), or when concurrency/failure gates fire.
  */
 export function queueWorkerHeartbeat(
   root: string,
@@ -72,7 +99,24 @@ export function queueWorkerHeartbeat(
   agentRole: string,
   agentTitle: string,
 ): void {
-  heartbeatQueue.push(() => runWorkerHeartbeat(root, agentName, agentRole, agentTitle).then(() => {}));
+  heartbeatQueue.push(async () => {
+    let result: WorkerRunResult;
+    try {
+      result = await runWorkerHeartbeat(root, agentName, agentRole, agentTitle);
+    } catch {
+      // Failure path already handled inside runWorkerHeartbeat (failRun + issue
+      // back to todo). Don't continuation-retry on errors — the next heartbeat
+      // tick will pick it up after backoff.
+      return;
+    }
+    if (result.status === 'in_progress') {
+      logger.info(`Scheduling continuation retry for ${agentName} in ${CONTINUATION_RETRY_MS}ms (run ended in_progress)`);
+      setTimeout(
+        () => queueWorkerHeartbeat(root, agentName, agentRole, agentTitle),
+        CONTINUATION_RETRY_MS,
+      ).unref?.();
+    }
+  });
   processQueue();
 }
 
@@ -98,7 +142,7 @@ export async function runWorkerHeartbeat(
   agentName: string,
   agentRole: string,
   agentTitle: string,
-): Promise<string> {
+): Promise<WorkerRunResult> {
   // Find assigned issues
   const inProgress = listIssues({ assigned_to: agentName, status: 'in_progress' });
   const todo = listIssues({ assigned_to: agentName, status: 'todo' });
@@ -106,7 +150,17 @@ export async function runWorkerHeartbeat(
   // Prioritize in_progress first, then highest priority todo
   let targetIssue = inProgress[0] || todo[0];
   if (!targetIssue) {
-    return 'No assigned work.';
+    return { summary: 'No assigned work.', status: 'noop' };
+  }
+
+  // Phase 3: Per-agent concurrency gate. If the agent is at its
+  // max_concurrent_runs or max_by_state limit, defer dispatch to the
+  // next tick rather than running anyway. Limits live in identity.yaml.
+  const concurrency = loadAgentConcurrency(root);
+  const gate = canDispatch(agentName, concurrency, targetIssue.status);
+  if (!gate.allowed) {
+    logger.info(`Skipping worker heartbeat for ${agentName}: ${gate.reason}`);
+    return { summary: `Skipped: ${gate.reason}`, status: 'noop' };
   }
 
   // Check if this issue has failed too many times
@@ -119,14 +173,20 @@ export async function runWorkerHeartbeat(
     } catch { /* ignore */ }
     // Try the next issue
     const nextIssue = [...inProgress, ...todo].find(i => i.id !== targetIssue.id);
-    if (!nextIssue) return `Issue KYB-${targetIssue.id} blocked due to ${failures} failures. Will pick up other work on next heartbeat.`;
+    if (!nextIssue) {
+      return {
+        summary: `Issue KYB-${targetIssue.id} blocked due to ${failures} failures. Will pick up other work on next heartbeat.`,
+        status: 'noop',
+      };
+    }
     targetIssue = nextIssue;
   }
 
   const runId = createRun(agentName, 'worker');
 
   try {
-    // Step 1: Check out the issue (moves to in_progress if in todo)
+    // Phase: PreparingWorkspace — checkout the issue, then run before_run hook
+    transitionPhase(runId, RunPhase.PreparingWorkspace);
     try {
       checkoutIssue(targetIssue.id, agentName);
       logger.info(`Worker ${agentName} checked out issue KYB-${targetIssue.id}`);
@@ -134,7 +194,18 @@ export async function runWorkerHeartbeat(
       // Already checked out or in_progress — fine
     }
 
-    // Step 2: Build prompt for the actual work
+    const hooks = loadAgentHooks(root);
+    const beforeRunResult = await runConfiguredHook('before_run', hooks, {
+      cwd: root,
+      env: { KYBERBOT_ISSUE_ID: String(targetIssue.id), KYBERBOT_AGENT: agentName },
+    });
+    if (beforeRunResult && !beforeRunResult.success && isFatalHook('before_run')) {
+      const reason = beforeRunResult.timedOut ? 'timeout' : `exit ${beforeRunResult.exitCode}`;
+      throw new Error(`before_run hook failed (${reason}): ${beforeRunResult.stderr.slice(0, 500) || 'no stderr'}`);
+    }
+
+    // Phase: BuildingPrompt
+    transitionPhase(runId, RunPhase.BuildingPrompt);
     const recentComments = getComments(targetIssue.id);
     const commentContext = recentComments.length > 0
       ? '\n\nRecent comments on this issue:\n' + recentComments.slice(-5).map(c => `${c.author_agent}: ${c.content}`).join('\n')
@@ -180,55 +251,92 @@ export async function runWorkerHeartbeat(
       '- STATUS: IN_PROGRESS — if you made progress but need another pass to finish',
     ].join('\n');
 
-    // Step 3: Run Claude to do the actual work (stream output to log file)
+    // Phase: LaunchingAgent → InitializingSession → StreamingTurn (looped)
+    //
+    // Symphony §7.1 worker loop: if a turn ends with STATUS: IN_PROGRESS,
+    // immediately re-prompt the agent with the tail of its previous output
+    // as context (approach (a) — context-via-prompt rather than warm-thread,
+    // since each client.complete() call is a fresh subprocess). Up to
+    // `worker_max_turns` turns per run (default 5).
+    transitionPhase(runId, RunPhase.LaunchingAgent);
     setCurrentIssueId(targetIssue.id);
     const client = getClaudeClient();
     const { getHeartbeatModelForRoot } = await import('../config.js');
-    let result: string;
-    try {
-      result = await client.complete(prompt, {
-        maxTurns: 25,
-        subprocess: true,
-        cwd: root,
-        model: getHeartbeatModelForRoot(root),
-        onChunk: (chunk) => appendRunLog(runId, chunk),
-      });
+    const maxWorkerTurns = Math.max(1, getIdentityForRoot(root).worker_max_turns ?? 5);
+    let result = '';
+    let turnCount = 0;
+    let parsedStatus: 'done' | 'in_review' | 'blocked' | 'in_progress' = 'in_progress';
 
-      // Step 3.5: Auto-detect created files from the response and register as artifacts.
-      // Agents mention file paths in their output — we extract them and check if they exist.
-      try {
-        const { createArtifact } = await import('./artifacts.js');
-        const { existsSync } = await import('fs');
-        const fileMatches = result.match(/\/Users\/[^\s\)\}\`\"\'\,]+\.(?:md|txt|json|yaml|yml|ts|js|csv|html)/g);
-        if (fileMatches) {
-          const seen = new Set<string>();
-          for (const filePath of fileMatches) {
-            const cleaned = filePath.replace(/[.\)\]]+$/, ''); // strip trailing punctuation
-            if (seen.has(cleaned)) continue;
-            seen.add(cleaned);
-            if (existsSync(cleaned)) {
-              createArtifact({
-                file_path: cleaned,
-                description: `Created during KYB-${targetIssue.id}: ${targetIssue.title}`,
-                agent_name: agentName,
-                issue_id: targetIssue.id,
-              });
-              logger.info(`Auto-detected artifact: ${cleaned}`, { agent: agentName, issue: targetIssue.id });
+    try {
+      while (turnCount < maxWorkerTurns) {
+        turnCount++;
+        const turnPrompt = turnCount === 1
+          ? prompt
+          : buildContinuationPrompt(targetIssue, result, turnCount, maxWorkerTurns);
+
+        if (turnCount === 1) {
+          transitionPhase(runId, RunPhase.InitializingSession);
+        }
+        transitionPhase(
+          runId,
+          RunPhase.StreamingTurn,
+          turnCount === 1 ? undefined : `continuation turn ${turnCount}/${maxWorkerTurns}`,
+        );
+        appendRunLog(runId, `\n--- TURN ${turnCount} of up to ${maxWorkerTurns} ---\n`);
+
+        result = await client.complete(turnPrompt, {
+          maxTurns: 25,
+          subprocess: true,
+          cwd: root,
+          model: getHeartbeatModelForRoot(root),
+          onChunk: (chunk) => appendRunLog(runId, chunk),
+        });
+
+        // Auto-detect deliverables per turn so partial progress is tracked
+        // even if the next turn errors out before the run completes.
+        try {
+          const { createArtifact } = await import('./artifacts.js');
+          const { existsSync } = await import('fs');
+          const fileMatches = result.match(/\/Users\/[^\s\)\}\`\"\'\,]+\.(?:md|txt|json|yaml|yml|ts|js|csv|html)/g);
+          if (fileMatches) {
+            const seen = new Set<string>();
+            for (const filePath of fileMatches) {
+              const cleaned = filePath.replace(/[.\)\]]+$/, '');
+              if (seen.has(cleaned)) continue;
+              seen.add(cleaned);
+              if (existsSync(cleaned)) {
+                createArtifact({
+                  file_path: cleaned,
+                  description: `Created during KYB-${targetIssue.id}: ${targetIssue.title}`,
+                  agent_name: agentName,
+                  issue_id: targetIssue.id,
+                });
+                logger.info(`Auto-detected artifact: ${cleaned}`, { agent: agentName, issue: targetIssue.id });
+              }
             }
           }
+        } catch (err) {
+          logger.debug('Artifact auto-detection failed', { error: String(err) });
         }
-      } catch (err) {
-        logger.debug('Artifact auto-detection failed', { error: String(err) });
+
+        // Parse status from this turn's output to decide whether to continue
+        if (result.includes('STATUS: DONE')) { parsedStatus = 'done'; break; }
+        if (result.includes('STATUS: IN_REVIEW')) { parsedStatus = 'in_review'; break; }
+        if (result.includes('STATUS: BLOCKED')) { parsedStatus = 'blocked'; break; }
+        // Default & explicit IN_PROGRESS both fall through to the next turn,
+        // unless we've hit max_turns — in which case we exit with in_progress
+        // status and the next heartbeat tick picks the issue back up.
+      }
+      if (turnCount >= maxWorkerTurns && parsedStatus === 'in_progress') {
+        appendRunLog(runId, `\n--- HIT worker_max_turns (${maxWorkerTurns}); exiting; next heartbeat will resume ---\n`);
       }
     } finally {
       setCurrentIssueId(null);
     }
 
-    // Step 4: Parse the status from the result
-    let newStatus: 'done' | 'in_review' | 'blocked' | 'in_progress' = 'in_progress';
-    if (result.includes('STATUS: DONE')) newStatus = 'done';
-    else if (result.includes('STATUS: IN_REVIEW')) newStatus = 'in_review';
-    else if (result.includes('STATUS: BLOCKED')) newStatus = 'blocked';
+    // Phase: Finishing — post comment, transition issue
+    transitionPhase(runId, RunPhase.Finishing);
+    const newStatus = parsedStatus;
 
     // Step 5: Add a comment with the results
     const commentBody = result.length > 2000
@@ -253,10 +361,34 @@ export async function runWorkerHeartbeat(
     }
 
     const summary = `Issue KYB-${targetIssue.id}: ${newStatus}. ${summaryText.slice(0, 300)}`;
+
+    // after_run hook (best-effort; failures logged but don't change run outcome)
+    await runConfiguredHook('after_run', hooks, {
+      cwd: root,
+      env: {
+        KYBERBOT_ISSUE_ID: String(targetIssue.id),
+        KYBERBOT_AGENT: agentName,
+        KYBERBOT_RUN_STATUS: newStatus,
+      },
+    });
+
     completeRun(runId, { result_summary: summary, log_output: result });
-    return summary;
+    return { summary, status: parsedStatus };
 
   } catch (err) {
+    // Try to run after_run even on failure so cleanup hooks can fire
+    try {
+      const hooks = loadAgentHooks(root);
+      await runConfiguredHook('after_run', hooks, {
+        cwd: root,
+        env: {
+          KYBERBOT_ISSUE_ID: String(targetIssue.id),
+          KYBERBOT_AGENT: agentName,
+          KYBERBOT_RUN_STATUS: 'failed',
+        },
+      });
+    } catch { /* ignore */ }
+
     failRun(runId, (err as Error).message);
     // Comment the failure and move issue back to todo so it can be retried
     try {
@@ -265,6 +397,65 @@ export async function runWorkerHeartbeat(
       logger.info(`Issue KYB-${targetIssue.id} moved back to todo after failure`);
     } catch { /* ignore transition errors */ }
     throw err;
+  }
+}
+
+/**
+ * Build a continuation prompt for turn N≥2. The agent saw the full task
+ * prompt on turn 1; here we just remind it what it's working on, give it
+ * the tail of its own previous output for context, and tell it to keep
+ * going. Mirrors Symphony §7.1's "continuation turns SHOULD send only
+ * continuation guidance".
+ */
+export function buildContinuationPrompt(issue: Issue, previousOutput: string, turnIndex: number, maxTurns: number): string {
+  // Tail of previous output — that's where the summary + STATUS line live
+  const tail = previousOutput.length > 2000 ? previousOutput.slice(-2000) : previousOutput;
+  return [
+    `You are continuing work on **issue KYB-${issue.id}: ${issue.title}**.`,
+    '',
+    `This is continuation turn ${turnIndex} of up to ${maxTurns}. Your previous turn ended with STATUS: IN_PROGRESS, meaning you made progress but said you needed another pass.`,
+    '',
+    '## Tail of your previous turn',
+    '',
+    '```',
+    tail,
+    '```',
+    '',
+    '## Continue',
+    '',
+    'Pick up from where you left off and make further progress. Same scope rules apply:',
+    '- Stay focused on this issue only',
+    '- Do not spend more than 15-20 tool calls on this turn',
+    '- If you hit a real blocker, end with STATUS: BLOCKED',
+    '- If you finish, end with STATUS: DONE or STATUS: IN_REVIEW',
+    '- If you still need another pass after this turn, end with STATUS: IN_PROGRESS',
+    '',
+    'Do NOT redo work you already finished in your previous turn — the filesystem reflects that work, and re-doing it wastes the loop budget.',
+    '',
+    `Current time: ${new Date().toISOString()}`,
+  ].join('\n');
+}
+
+/**
+ * Read concurrency config from an agent's identity.yaml. Returns {} when
+ * unset so callers don't have to special-case unconfigured agents.
+ */
+function loadAgentConcurrency(root: string): ConcurrencyConfig {
+  try {
+    return getIdentityForRoot(root).concurrency ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Read hooks config from an agent's identity.yaml.
+ */
+function loadAgentHooks(root: string): HooksConfig {
+  try {
+    return (getIdentityForRoot(root).hooks ?? {}) as HooksConfig;
+  } catch {
+    return {};
   }
 }
 

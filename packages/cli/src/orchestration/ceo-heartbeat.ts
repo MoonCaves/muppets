@@ -23,6 +23,8 @@ import {
   getStuckIssues,
 } from './index.js';
 import { createRun, completeRun, failRun, appendRunLog } from './runs.js';
+import { transitionPhase, RunPhase } from './run-phases.js';
+import { reconcileTick, recordTickCompletion } from './reconcile.js';
 import { getCeoToolDefs, formatToolsForPrompt, parseToolCalls, executeTool, resetSessionLimits } from './tools.js';
 
 const logger = createLogger('ceo-heartbeat');
@@ -325,14 +327,36 @@ export function buildCeoHeartbeatPrompt(agentName: string): string {
 export async function runCeoHeartbeat(root: string, agentName: string): Promise<string> {
   logger.info('Running CEO orchestration heartbeat', { agent: agentName });
 
+  // Symphony §8.1: every tick begins with a reconciliation pass — stall
+  // detection + tracker-state refresh — before any dispatch decisions.
+  // Stall timeout is read from this CEO agent's identity.yaml.
+  let stallTimeoutMs: number | undefined;
+  try {
+    stallTimeoutMs = getIdentityForRoot(root).heartbeat_stall_timeout_ms;
+  } catch { /* fall back to default */ }
+  try {
+    const tick = await reconcileTick({ stallTimeoutMs });
+    recordTickCompletion(tick);
+    if (tick.stalledRunIds.length > 0 || tick.canceledRunIds.length > 0) {
+      logger.info('Reconcile tick produced changes', tick);
+    }
+  } catch (err) {
+    logger.warn('Reconcile tick failed', { error: String(err) });
+  }
+
   resetSessionLimits(); // Prevent runaway issue/goal creation
   const runId = createRun(agentName, 'orchestration');
 
   try {
+    transitionPhase(runId, RunPhase.PreparingWorkspace);
+    transitionPhase(runId, RunPhase.BuildingPrompt);
     const prompt = buildCeoHeartbeatPrompt(agentName);
 
+    transitionPhase(runId, RunPhase.LaunchingAgent);
     const client = getClaudeClient();
     const { getHeartbeatModelForRoot } = await import('../config.js');
+    transitionPhase(runId, RunPhase.InitializingSession);
+    transitionPhase(runId, RunPhase.StreamingTurn);
     const result = await client.complete(prompt, {
       maxTurns: 15,
       subprocess: true,
@@ -349,7 +373,7 @@ export async function runCeoHeartbeat(root: string, agentName: string): Promise<
       ].join(' '),
     });
 
-    // Parse and execute any tool calls in the response
+    transitionPhase(runId, RunPhase.Finishing);
     const toolCalls = parseToolCalls(result);
     const toolResults: string[] = [];
 

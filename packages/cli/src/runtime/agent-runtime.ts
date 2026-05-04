@@ -19,6 +19,7 @@ import { Channel } from '../server/channels/types.js';
 import { ServiceHandle } from '../types.js';
 import { IdentityConfig } from '../types.js';
 import { AgentBus } from './agent-bus.js';
+import { watchIdentity, IdentityWatcher } from './identity-watcher.js';
 
 const logger = createLogger('agent-runtime');
 
@@ -63,15 +64,28 @@ export class AgentRuntime {
   private startedAt = 0;
   private _status: 'running' | 'stopped' | 'error' = 'stopped';
   private embeddingsReady = false;
+  private identityWatcher: IdentityWatcher | null = null;
+  private currentIdentity: IdentityConfig;
 
   constructor(config: AgentRuntimeConfig) {
     this.root = config.root;
     this.name = config.name;
     this.identity = config.identity;
+    this.currentIdentity = config.identity;
     this.bus = config.bus || null;
 
     // Load API token from .env
     this.apiToken = this.loadApiToken();
+  }
+
+  /**
+   * Latest identity for this agent — reflects hot-reloaded changes from
+   * identity.yaml. Use this in code that needs the most recent config;
+   * `identity` (the constructor-time snapshot) is preserved for callers
+   * that want to compare or log the original.
+   */
+  getIdentity(): IdentityConfig {
+    return this.currentIdentity;
   }
 
   /**
@@ -162,6 +176,12 @@ export class AgentRuntime {
       } catch { /* system-prompt not available */ }
     }
 
+    // Start hot-reload watcher for identity.yaml. Saves to the file
+    // invalidate the config cache; the next dispatch picks up new values.
+    this.identityWatcher = watchIdentity(this.root, {
+      onReload: (next) => { this.currentIdentity = next; },
+    });
+
     this._status = 'running';
     logger.info(`Agent ${this.name} started`, {
       heartbeat: this.heartbeat ? 'running' : 'disabled',
@@ -183,6 +203,12 @@ export class AgentRuntime {
    */
   async stop(): Promise<void> {
     logger.info(`Stopping agent: ${this.name}`);
+
+    // Stop hot-reload watcher
+    if (this.identityWatcher) {
+      this.identityWatcher.stop();
+      this.identityWatcher = null;
+    }
 
     // Stop heartbeat
     if (this.heartbeat) {
