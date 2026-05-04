@@ -27,11 +27,15 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-// Load .env from KYBERBOT_ROOT or cwd before anything else
+// Load .env from KYBERBOT_ROOT or cwd before anything else.
+// override: true is required — by default dotenv does NOT overwrite existing
+// process.env vars, so per-agent .env values get masked by the parent shell's
+// env (e.g. when one agent invokes another agent's CLI in a subprocess and
+// inherits the parent's KYBERBOT_API_TOKEN). See infra-known-gotchas.md.
 const envRoot = process.env.KYBERBOT_ROOT || process.cwd();
 const envPath = join(envRoot, '.env');
 if (existsSync(envPath)) {
-  loadEnv({ path: envPath });
+  loadEnv({ path: envPath, override: true });
 }
 
 import { createRunCommand } from './commands/run.js';
