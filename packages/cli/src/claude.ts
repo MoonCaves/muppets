@@ -148,6 +148,26 @@ function deriveAgentName(cwd: string | undefined): string {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Phase C — In-flight LiteLLM call counter (Option α instrumentation)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Tracks completeLitellm() calls between request-send and return. Read
+// at fleet-manager shutdown to log [INFLIGHT_AT_RESTART] for the 1-week
+// observation window that gates Phase 1.6 (graceful-drain) work.
+//
+// Promotion threshold: ≥5 fleet restarts in window AND avg in-flight
+// ≥0.5 across them. Below either, in-flight loss on restart is
+// statistical noise and graceful-drain isn't justified.
+//
+// Module-scoped (not class-static) — fleet-wide single counter, even
+// with multiple ClaudeClient instances per agent runtime.
+let inFlightLitellmCount = 0;
+
+export function getInFlightLitellmCount(): number {
+  return inFlightLitellmCount;
+}
+
 export class ClaudeClient {
   private mode: 'agent-sdk' | 'sdk' | 'subprocess';
   private sdk: any | null = null;
@@ -209,7 +229,12 @@ export class ClaudeClient {
       });
       logger.debug('Initialized LiteLLM completion client', { baseUrl: getLitellmBaseUrl() });
     } catch (err) {
+      // Second init-failure path: catches both missing-key throws from the
+      // guard above AND unexpected errors (import failure, OpenAI ctor, bad
+      // baseURL, etc.). Flag is set so subsequent calls hard-fail immediately
+      // without retrying — no silent retry loop on a broken config.
       this.litellmInitFailed = true;
+      logger.error('LiteLLM client init failed — completion route disabled', { err });
       throw err;
     }
   }
@@ -254,20 +279,54 @@ export class ClaudeClient {
     });
 
     const t0 = Date.now();
+    inFlightLitellmCount++;
     try {
-      // metadata round-trip — LiteLLM forwards arbitrary metadata to its
-      // logging/callback layer. Keys per Phase 1 spec.
+      // Phase 1 metadata transport — two surfaces, two jobs:
+      //   metadata.spend_logs_metadata → object persisted to LiteLLM_SpendLogs
+      //     (analytics; queryable via /spend/logs by call_site/caller/agent).
+      //   metadata.tags                → string[] persisted to request_tags
+      //     (budget enforcement via POST /tag/new + max_budget; hard 400 on cap).
+      //
+      // Sentinel B verified `metadata.spend_logs_metadata` round-trips
+      // verbatim to LiteLLM_SpendLogs.spend_logs_metadata. Top-level
+      // `metadata.{call_site,...}` is silently dropped by the proxy
+      // (Sentinel A failure mode). We forward the nested object via
+      // `extra_body` to stay TS-clean against OpenAI SDK 4.104 (whose
+      // typed `metadata` field is Record<string,string> only) and to
+      // document intent — these are LiteLLM-specific extensions, not
+      // OpenAI fields.
+      //
+      // `stream: false` is asserted both at the call site (typed false)
+      // and at the response shape — Phase C invariant: completeLitellm()
+      // never streams. If a future caller flips this without rewriting
+      // the .choices access path below, the runtime guard catches it
+      // before silent breakage. 2-line cost, removes a footgun.
       const response = await this.litellm.chat.completions.create({
         model,
         messages,
         max_tokens: maxTokens,
-        metadata: {
-          agent_root: agentRoot,
-          agent_name: agentName,
-          call_site: callSite,
-          caller,
+        stream: false as const,
+        extra_body: {
+          metadata: {
+            spend_logs_metadata: {
+              agent_root: agentRoot,
+              agent_name: agentName,
+              call_site: callSite,
+              caller,
+            },
+            tags: [`caller:${caller}`, `agent:${agentName}`],
+          },
         },
       });
+
+      // Phase C non-streaming invariant — guard before .choices access.
+      if (response && typeof (response as any)[Symbol.asyncIterator] === 'function') {
+        throw new Error(
+          `completeLitellm: unexpected streaming response shape ` +
+          `(call_site=${callSite}, caller=${caller}). Phase C invariant violated — ` +
+          `this path returns a plain string and does not consume async iterators.`
+        );
+      }
 
       const text = response?.choices?.[0]?.message?.content;
       if (typeof text !== 'string' || text.length === 0) {
@@ -315,6 +374,11 @@ export class ClaudeClient {
         error_param: err?.param,
       });
       throw err;
+    } finally {
+      // Phase C — decrement on every exit path (success, empty-content
+      // throw, network error, runtime guard throw). Pairs with the
+      // increment immediately before the create() call.
+      inFlightLitellmCount--;
     }
   }
 
