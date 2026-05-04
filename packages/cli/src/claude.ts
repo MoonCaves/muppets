@@ -45,14 +45,40 @@ export interface CompleteOptions {
    * agent's root here. Only used by subprocess mode.
    */
   cwd?: string;
+  /**
+   * Optional loop / fruitless-turn detection. When set, the runtime
+   * watches stream-json events for repeated identical tool calls or
+   * runs of consecutive tool errors, and kills the subprocess early
+   * if a threshold trips. Only effective in stream-json mode (i.e.
+   * when onChunk is also provided).
+   */
+  loopDetection?: {
+    enabled: boolean;
+    maxIdenticalToolCalls: number;
+    maxConsecutiveToolErrors: number;
+  };
 }
 
-// Model ID mapping
+// Model ID mapping. Update when Anthropic publishes new minor versions —
+// the shorthand ('opus') resolves to the current latest model ID here.
 const MODEL_IDS: Record<string, string> = {
   haiku: 'claude-haiku-4-5',
   sonnet: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-6',
+  opus: 'claude-opus-4-7',
 };
+
+/**
+ * Order-stable JSON stringify so `{a:1,b:2}` and `{b:2,a:1}` produce the
+ * same key for the loop-detection tool-call signature comparison. Without
+ * this, an LLM that re-emits the same call with reordered keys looks new.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+}
 
 export class ClaudeClient {
   private mode: 'agent-sdk' | 'sdk' | 'subprocess';
@@ -201,6 +227,62 @@ export class ClaudeClient {
       let stdoutBytes = 0;
       const MAX_STDOUT = 2 * 1024 * 1024; // 2MB cap — subprocess responses should be small
 
+      // Live loop detector. Only active in stream-json mode + when caller
+      // opted in via opts.loopDetection. Tracks tool_use signatures and
+      // consecutive tool errors. Kills the subprocess early when it sees
+      // 3× identical calls or 5× consecutive errors (defaults).
+      const loopCfg = opts.loopDetection;
+      const loopActive = !!(useStreamJson && loopCfg?.enabled);
+      let lineBuffer = '';
+      const recentTools: Array<{ key: string; isError: boolean }> = [];
+      // Mutable cell for the loop-bail signal. Use an array rather than a
+      // `let` so TS doesn't narrow the closure-captured value to its
+      // initial type when read from inside callbacks.
+      const loopBailRef: Array<{ reason: string }> = [];
+      const setLoopBail = (reason: string): void => { loopBailRef[0] = { reason }; };
+      const getLoopBail = (): { reason: string } | null => loopBailRef[0] ?? null;
+
+      const checkLoopThresholds = (): void => {
+        if (!loopCfg) return;
+        // Identical-args streak
+        const m = loopCfg.maxIdenticalToolCalls;
+        if (recentTools.length >= m) {
+          const tail = recentTools.slice(-m);
+          const firstKey = tail[0].key;
+          if (firstKey && tail.every(t => t.key === firstKey)) {
+            setLoopBail(`${m} identical tool calls in a row (${firstKey.slice(0, 80)})`);
+            return;
+          }
+        }
+        // Consecutive error streak
+        let consecutive = 0;
+        for (let i = recentTools.length - 1; i >= 0; i--) {
+          if (recentTools[i].isError) consecutive++;
+          else break;
+        }
+        if (consecutive >= loopCfg.maxConsecutiveToolErrors) {
+          setLoopBail(`${consecutive} consecutive tool errors`);
+        }
+      };
+
+      const ingestStreamLine = (line: string): void => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        let event: any;
+        try { event = JSON.parse(trimmed); } catch { return; }
+        const blocks: any[] = Array.isArray(event?.message?.content) ? event.message.content : [];
+        for (const block of blocks) {
+          if (block?.type === 'tool_use') {
+            const key = `${block.name}:${stableStringify(block.input ?? {})}`;
+            recentTools.push({ key, isError: false });
+          } else if (block?.type === 'tool_result' && block.is_error) {
+            if (recentTools.length > 0) recentTools[recentTools.length - 1].isError = true;
+            else recentTools.push({ key: 'unknown', isError: true });
+          }
+        }
+        if (blocks.length > 0) checkLoopThresholds();
+      };
+
       let stdoutDestroyed = false;
       proc.stdout.on('data', (data: Buffer) => {
         stdoutBytes += data.length;
@@ -209,6 +291,21 @@ export class ClaudeClient {
           // Stream callback for live log capture
           if (opts.onChunk) {
             try { opts.onChunk(data.toString()); } catch { /* ignore */ }
+          }
+          // Live loop detection — parse line-by-line in stream-json mode
+          if (loopActive && !getLoopBail()) {
+            lineBuffer += data.toString();
+            const newlineIdx = lineBuffer.lastIndexOf('\n');
+            if (newlineIdx !== -1) {
+              const complete = lineBuffer.slice(0, newlineIdx);
+              lineBuffer = lineBuffer.slice(newlineIdx + 1);
+              for (const line of complete.split('\n')) ingestStreamLine(line);
+              const bailNow = getLoopBail();
+              if (bailNow) {
+                logger.warn('Loop detected — killing subprocess', { reason: bailNow.reason });
+                try { proc.kill('SIGTERM'); } catch { /* ignore */ }
+              }
+            }
           }
         } else if (!stdoutDestroyed) {
           // Destroy the read stream to stop reading entirely.
@@ -231,33 +328,76 @@ export class ClaudeClient {
         errChunks.length = 0;
         stdoutBytes = 0;
 
+        // Parse stream-json (if used) to find the final result event +
+        // detect error_max_turns. We do this regardless of exit code so
+        // that hitting the inner turn cap is recoverable — the worker
+        // continuation loop catches the IN_PROGRESS marker we append
+        // below and starts a fresh subprocess turn.
+        let resultText = '';
+        let resultSubtype: string | null = null;
+        let isError = false;
+        if (useStreamJson) {
+          for (const line of stdout.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const event = JSON.parse(trimmed);
+              if (event.type === 'result') {
+                if (event.result) resultText = event.result;
+                if (event.subtype) resultSubtype = event.subtype;
+                if (event.is_error) isError = true;
+              } else if (event.type === 'assistant' && event.message?.content) {
+                for (const block of event.message.content) {
+                  if (block.type === 'text') resultText = block.text;
+                }
+              }
+            } catch { /* not valid JSON — skip */ }
+          }
+        }
+
+        // Loop detected mid-stream — runtime killed the subprocess. Surface
+        // a synthetic STATUS: BLOCKED so the outer worker loop does NOT
+        // continuation-fire on it (looping ≠ needs more turns).
+        const bailFinal = getLoopBail();
+        if (bailFinal) {
+          logger.warn('Returning loop-bail result', { reason: bailFinal.reason });
+          const augmented = (resultText || stdout).slice(-2000) +
+            `\n\n[runtime] Loop detected and aborted: ${bailFinal.reason}\n` +
+            `STATUS: BLOCKED — runtime detected ${bailFinal.reason}`;
+          resolve(augmented);
+          return;
+        }
+
+        // Recoverable: SDK hit its --max-turns cap. The worker did real work
+        // but couldn't reach a STATUS line in time. Surface the partial
+        // output with a synthetic STATUS: IN_PROGRESS so the outer worker
+        // loop fires another fresh subprocess turn (Symphony §7.1 model).
+        if (resultSubtype === 'error_max_turns') {
+          logger.warn('claude subprocess hit max-turns cap — returning partial output for continuation', {
+            chars: resultText.length,
+          });
+          const augmented = (resultText || stdout) +
+            '\n\n[runtime] Hit inner SDK max-turns cap; agent has more work to do.\n' +
+            'STATUS: IN_PROGRESS';
+          resolve(augmented);
+          return;
+        }
+
         if (code === 0) {
           if (useStreamJson) {
-            // Parse stream-json: extract the final result text from JSONL
-            // The last line with type "result" has the final text
-            let resultText = '';
-            for (const line of stdout.split('\n')) {
-              const trimmed = line.trim();
-              if (!trimmed) continue;
-              try {
-                const event = JSON.parse(trimmed);
-                if (event.type === 'result' && event.result) {
-                  resultText = event.result;
-                } else if (event.type === 'assistant' && event.message?.content) {
-                  // Accumulate assistant text blocks
-                  for (const block of event.message.content) {
-                    if (block.type === 'text') resultText = block.text;
-                  }
-                }
-              } catch { /* not valid JSON — skip */ }
-            }
             resolve(resultText || stdout);
           } else {
             resolve(stdout);
           }
+        } else if (resultText && !isError) {
+          // Non-zero exit but a complete result was streamed — degrade gracefully.
+          logger.warn(`claude subprocess exited ${code} but a result was streamed; using it`, {
+            stderrPreview: stderr.slice(0, 200),
+          });
+          resolve(resultText);
         } else {
-          logger.error(`claude subprocess exited with code ${code}`, { stderr: stderr.slice(0, 500) });
-          reject(new Error(`claude subprocess failed: ${stderr.slice(0, 500) || `exit code ${code}`}`));
+          logger.error(`claude subprocess exited with code ${code}`, { stderr: stderr.slice(0, 500), subtype: resultSubtype });
+          reject(new Error(`claude subprocess failed: ${stderr.slice(0, 500) || `exit code ${code}${resultSubtype ? ` (${resultSubtype})` : ''}`}`));
         }
       });
 

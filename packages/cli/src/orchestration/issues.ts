@@ -367,21 +367,23 @@ export function getStuckIssues(): { staleInProgress: Issue[]; staleBlocked: Issu
 
 /**
  * Recover issues stuck in in_progress with a checkout after a fleet restart.
- * Moves them back to todo so they can be retried.
+ * Moves them back to todo so they can be retried, and returns the count
+ * plus the distinct assignees so callers can immediately re-dispatch
+ * heartbeats for those agents.
  */
-export function recoverStuckIssues(): number {
+export function recoverStuckIssues(): { count: number; assignees: string[] } {
   const db = getOrchDb();
   const stuck = db.prepare(
-    "SELECT id FROM issues WHERE status='in_progress' AND checkout_by IS NOT NULL"
-  ).all();
+    "SELECT id, checkout_by, assigned_to FROM issues WHERE status='in_progress' AND checkout_by IS NOT NULL"
+  ).all() as Array<{ id: number; checkout_by: string | null; assigned_to: string | null }>;
 
-  if (stuck.length === 0) return 0;
+  if (stuck.length === 0) return { count: 0, assignees: [] };
 
   db.prepare(
     "UPDATE issues SET status='todo', checkout_by=NULL, checkout_at=NULL, updated_at=datetime('now') WHERE status='in_progress' AND checkout_by IS NOT NULL"
   ).run();
 
-  for (const { id } of stuck as Array<{ id: number }>) {
+  for (const { id } of stuck) {
     logActivity({
       actor: 'system',
       action: 'issue.recovered',
@@ -391,5 +393,11 @@ export function recoverStuckIssues(): number {
     });
   }
 
-  return stuck.length;
+  const assigneeSet = new Set<string>();
+  for (const row of stuck) {
+    const a = row.assigned_to ?? row.checkout_by;
+    if (a) assigneeSet.add(a);
+  }
+
+  return { count: stuck.length, assignees: [...assigneeSet] };
 }

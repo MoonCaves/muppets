@@ -109,7 +109,61 @@ export function detectStalls(opts: { stallTimeoutMs?: number; now?: number } = {
     logger.warn(`Marked run ${id} as stalled`);
   }
 
+  // Symphony §8.4 post-exit retry — for each stalled run, schedule a
+  // fresh worker heartbeat ~1s later for that agent. This closes the
+  // "stop anywhere → resume in 1s" gap; without it, stalls would wait
+  // for the next heartbeat tick (default 1h).
+  if (stalled.length > 0) {
+    void scheduleStallReDispatch(stalled);
+  }
+
   return { stalledRunIds: stalled };
+}
+
+const STALL_REDISPATCH_DELAY_MS = 1_000;
+
+/**
+ * Look up each stalled run's agent and queue a fresh worker heartbeat
+ * 1 second later. Resolves agent root via the registry and role/title
+ * via the org chart. Done with dynamic imports to avoid a circular
+ * dependency with worker-heartbeat (which imports canDispatch from us).
+ */
+async function scheduleStallReDispatch(stalledRunIds: number[]): Promise<void> {
+  const db = getOrchDb();
+  const agents = new Map<string, true>(); // dedupe — one stall per agent is enough
+  for (const id of stalledRunIds) {
+    const row = db.prepare('SELECT agent_name FROM heartbeat_runs WHERE id = ?').get(id) as
+      { agent_name: string } | undefined;
+    if (row?.agent_name) agents.set(row.agent_name.toLowerCase(), true);
+  }
+  if (agents.size === 0) return;
+
+  // Resolve role/title/root via org chart + registry, then queue
+  const { getOrgChart } = await import('./org.js');
+  const { loadRegistry } = await import('../registry.js');
+  const { queueWorkerHeartbeat, queueCeoHeartbeat } = await import('./worker-heartbeat.js');
+  const { runCeoHeartbeat } = await import('./ceo-heartbeat.js');
+  const orgChart = getOrgChart();
+  const registry = loadRegistry();
+
+  for (const lowerName of agents.keys()) {
+    const node = orgChart.find(n => n.agent_name.toLowerCase() === lowerName);
+    if (!node) continue;
+    const entry = registry.agents[node.agent_name];
+    if (!entry?.root) continue;
+    setTimeout(() => {
+      try {
+        if (node.is_ceo) {
+          queueCeoHeartbeat(entry.root!, node.agent_name, runCeoHeartbeat);
+        } else {
+          queueWorkerHeartbeat(entry.root!, node.agent_name, node.role, node.title || node.agent_name);
+        }
+        logger.info(`Stall re-dispatch fired for ${node.agent_name}`);
+      } catch (err) {
+        logger.warn(`Stall re-dispatch failed for ${node.agent_name}`, { error: String(err) });
+      }
+    }, STALL_REDISPATCH_DELAY_MS).unref?.();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

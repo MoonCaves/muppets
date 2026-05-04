@@ -18,7 +18,7 @@ import {
 import { createRun, completeRun, failRun, appendRunLog, countRecentFailures } from './runs.js';
 import { transitionPhase, RunPhase } from './run-phases.js';
 import { canDispatch, type ConcurrencyConfig } from './reconcile.js';
-import { runConfiguredHook, isFatalHook, type HooksConfig } from '../runtime/hooks.js';
+import { runConfiguredHook, type HooksConfig } from '../runtime/hooks.js';
 import { getClaudeClient } from '../claude.js';
 import { getIdentityForRoot } from '../config.js';
 import { setCurrentIssueId } from './tools.js';
@@ -48,6 +48,21 @@ export interface WorkerRunResult {
   summary: string;
   status: 'noop' | 'done' | 'in_review' | 'blocked' | 'in_progress';
 }
+
+/**
+ * In-memory carry-over for cross-run continuation. When a worker run
+ * exits cleanly with status='in_progress' (i.e. it hit worker_max_turns
+ * without reaching DONE/REVIEW/BLOCKED), we stash the tail of its final
+ * output here. The post-exit retry (1s later) consumes the entry and
+ * builds a continuation prompt instead of resending the original task
+ * prompt — so the agent picks up with context, not from scratch.
+ *
+ * Keyed by issue id. Entries are consumed on the next dispatch for that
+ * issue, so a single in_progress exit only affects the immediately
+ * following dispatch. Process restart drops all entries (we recover
+ * from filesystem + comments instead).
+ */
+const pendingContinuations = new Map<number, { tail: string; turnIndex: number }>();
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timerId: ReturnType<typeof setTimeout>;
@@ -184,6 +199,19 @@ export async function runWorkerHeartbeat(
 
   const runId = createRun(agentName, 'worker');
 
+  // Resolve loop / retry / turn-cap config up front so prompt building
+  // and the dispatch loop both see the same values.
+  const {
+    getHeartbeatModelForRoot,
+    getHeartbeatMaxInnerTurnsForRoot,
+    getLoopDetectionConfigForRoot,
+    getSubprocessRetryConfigForRoot,
+  } = await import('../config.js');
+  const maxWorkerTurns = Math.max(1, getIdentityForRoot(root).worker_max_turns ?? 5);
+  const maxInnerTurns = getHeartbeatMaxInnerTurnsForRoot(root);
+  const loopDetection = getLoopDetectionConfigForRoot(root);
+  const subprocessRetry = getSubprocessRetryConfigForRoot(root);
+
   try {
     // Phase: PreparingWorkspace — checkout the issue, then run before_run hook
     transitionPhase(runId, RunPhase.PreparingWorkspace);
@@ -199,19 +227,43 @@ export async function runWorkerHeartbeat(
       cwd: root,
       env: { KYBERBOT_ISSUE_ID: String(targetIssue.id), KYBERBOT_AGENT: agentName },
     });
-    if (beforeRunResult && !beforeRunResult.success && isFatalHook('before_run')) {
+    if (beforeRunResult && !beforeRunResult.success) {
       const reason = beforeRunResult.timedOut ? 'timeout' : `exit ${beforeRunResult.exitCode}`;
-      throw new Error(`before_run hook failed (${reason}): ${beforeRunResult.stderr.slice(0, 500) || 'no stderr'}`);
+      const stderrPreview = beforeRunResult.stderr.slice(0, 500) || 'no stderr';
+      // Non-fatal by default — record the failure in phase_history and
+      // continue with the run. The strict Symphony §9.4 semantic (fatal)
+      // is opt-in per agent via hooks.fatal_on_before_run: true.
+      if (hooks?.fatal_on_before_run === true) {
+        throw new Error(`before_run hook failed (${reason}): ${stderrPreview}`);
+      }
+      logger.warn('before_run hook failed but non-fatal — continuing run', { reason, stderrPreview });
+      transitionPhase(runId, RunPhase.PreparingWorkspace, `before_run failed (${reason}); continued`);
+      appendRunLog(runId, `\n[hooks] before_run failed (${reason}): ${stderrPreview}\n[hooks] continuing run anyway\n`);
     }
 
     // Phase: BuildingPrompt
     transitionPhase(runId, RunPhase.BuildingPrompt);
+
+    // Cross-run continuation: if the previous run for this issue exited
+    // in_progress, the post-exit retry left context behind. Use the
+    // continuation prompt to pick up where we left off — same shape as
+    // the inner-loop continuation, just spanning a run boundary.
+    const continuation = pendingContinuations.get(targetIssue.id);
+    if (continuation) {
+      pendingContinuations.delete(targetIssue.id);
+      logger.info(`Cross-run continuation for issue KYB-${targetIssue.id} (turn ${continuation.turnIndex})`);
+      transitionPhase(runId, RunPhase.BuildingPrompt, `cross-run continuation from turn ${continuation.turnIndex}`);
+      appendRunLog(runId, `\n[runtime] resuming issue KYB-${targetIssue.id} via cross-run continuation\n`);
+    }
+
     const recentComments = getComments(targetIssue.id);
     const commentContext = recentComments.length > 0
       ? '\n\nRecent comments on this issue:\n' + recentComments.slice(-5).map(c => `${c.author_agent}: ${c.content}`).join('\n')
       : '';
 
-    const prompt = [
+    const prompt = continuation
+      ? buildContinuationPrompt(targetIssue, continuation.tail, continuation.turnIndex + 1, maxWorkerTurns + continuation.turnIndex)
+      : [
       `You are ${agentTitle}, ${agentRole}.`,
       `Your working directory is: ${root}`,
       '',
@@ -261,8 +313,6 @@ export async function runWorkerHeartbeat(
     transitionPhase(runId, RunPhase.LaunchingAgent);
     setCurrentIssueId(targetIssue.id);
     const client = getClaudeClient();
-    const { getHeartbeatModelForRoot } = await import('../config.js');
-    const maxWorkerTurns = Math.max(1, getIdentityForRoot(root).worker_max_turns ?? 5);
     let result = '';
     let turnCount = 0;
     let parsedStatus: 'done' | 'in_review' | 'blocked' | 'in_progress' = 'in_progress';
@@ -284,13 +334,40 @@ export async function runWorkerHeartbeat(
         );
         appendRunLog(runId, `\n--- TURN ${turnCount} of up to ${maxWorkerTurns} ---\n`);
 
-        result = await client.complete(turnPrompt, {
-          maxTurns: 25,
-          subprocess: true,
-          cwd: root,
-          model: getHeartbeatModelForRoot(root),
-          onChunk: (chunk) => appendRunLog(runId, chunk),
-        });
+        // Transient-error retry-with-backoff. Symphony §8.4 formula:
+        // delay = min(base * 2^(attempt-1), max). Default 3 attempts.
+        let attempt = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          attempt++;
+          try {
+            result = await client.complete(turnPrompt, {
+              maxTurns: maxInnerTurns,
+              subprocess: true,
+              cwd: root,
+              model: getHeartbeatModelForRoot(root),
+              onChunk: (chunk) => appendRunLog(runId, chunk),
+              loopDetection: {
+                enabled: loopDetection.enabled,
+                maxIdenticalToolCalls: loopDetection.maxIdenticalToolCalls,
+                maxConsecutiveToolErrors: loopDetection.maxConsecutiveToolErrors,
+              },
+            });
+            break; // success
+          } catch (err) {
+            if (attempt >= subprocessRetry.maxAttempts) {
+              logger.error(`subprocess attempt ${attempt}/${subprocessRetry.maxAttempts} failed — giving up`, { error: String(err) });
+              throw err;
+            }
+            const backoffMs = Math.min(
+              subprocessRetry.baseBackoffMs * Math.pow(2, attempt - 1),
+              subprocessRetry.maxBackoffMs,
+            );
+            logger.warn(`subprocess attempt ${attempt}/${subprocessRetry.maxAttempts} failed — retrying in ${backoffMs}ms`, { error: String(err) });
+            appendRunLog(runId, `\n[runtime] subprocess error on attempt ${attempt}/${subprocessRetry.maxAttempts}; retrying in ${Math.round(backoffMs / 1000)}s\n`);
+            await new Promise(r => setTimeout(r, backoffMs));
+          }
+        }
 
         // Auto-detect deliverables per turn so partial progress is tracked
         // even if the next turn errors out before the run completes.
@@ -373,6 +450,17 @@ export async function runWorkerHeartbeat(
     });
 
     completeRun(runId, { result_summary: summary, log_output: result });
+
+    // Stash tail for cross-run continuation when the post-exit retry
+    // fires for this same issue. Only when the run ended in_progress.
+    if (parsedStatus === 'in_progress') {
+      const priorTurnIndex = continuation?.turnIndex ?? 0;
+      pendingContinuations.set(targetIssue.id, {
+        tail: result.length > 2000 ? result.slice(-2000) : result,
+        turnIndex: priorTurnIndex + maxWorkerTurns,
+      });
+    }
+
     return { summary, status: parsedStatus };
 
   } catch (err) {

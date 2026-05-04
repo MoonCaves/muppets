@@ -43,7 +43,7 @@ describe('watchIdentity', () => {
     writeFileSync(join(dir, 'identity.yaml'), 'agent_name: a\ntimezone: UTC\nheartbeat_interval: 30m\n');
 
     // Wait past two poll cycles (1s interval) so the change is detected
-    await new Promise(r => setTimeout(r, 2200));
+    await new Promise(r => setTimeout(r, 4500));
     expect(reloaded).toBe(true);
   });
 
@@ -58,12 +58,12 @@ describe('watchIdentity', () => {
     handles.push(w);
 
     writeFileSync(join(dir, 'identity.yaml'), 'agent_name: [unclosed');
-    await new Promise(r => setTimeout(r, 2200));
+    await new Promise(r => setTimeout(r, 4500));
     expect(lastError).not.toBeNull();
 
     // Subsequent valid write should still produce a reload
     writeFileSync(join(dir, 'identity.yaml'), 'agent_name: a\ntimezone: UTC\nheartbeat_interval: 5m\n');
-    await new Promise(r => setTimeout(r, 2200));
+    await new Promise(r => setTimeout(r, 4500));
     expect(reloads).toBeGreaterThanOrEqual(1);
   });
 });

@@ -118,6 +118,12 @@ export interface HooksConfig {
   after_run?: string;
   before_remove?: string;
   timeout_ms?: number;
+  /**
+   * Opt in to the strict Symphony §9.4 semantic where a failed before_run
+   * aborts the run attempt. Default false — failures are logged in
+   * phase_history and the run continues.
+   */
+  fatal_on_before_run?: boolean;
 }
 
 export async function runConfiguredHook(

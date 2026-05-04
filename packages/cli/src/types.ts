@@ -35,11 +35,23 @@ export interface IdentityConfig {
   };
   /**
    * Model used for heartbeat and orchestration (CEO/worker) Claude calls.
-   * Defaults to 'sonnet' if unset — heartbeat is tool-use orchestration,
-   * not deep reasoning, so running Opus there is wasteful. The agent's
-   * main chat still uses `claude.model` (Opus by default).
+   * Defaults to 'opus' (Claude Opus 4.7) if unset — heartbeats are how
+   * agents do their actual long-running advanced work (multi-pass
+   * refactors, audits, research), so the better model is the right
+   * default. Set explicitly to 'sonnet' or 'haiku' if you want to trade
+   * capability for cost on a per-agent basis. The agent's main chat
+   * still uses `claude.model` (also Opus by default).
    */
   heartbeat_model?: 'haiku' | 'sonnet' | 'opus';
+  /**
+   * Inner SDK max-turns for one Claude call within a single heartbeat
+   * turn. Defaults to 50 (was 25 prior to v1.9.2 — lifted because real
+   * tasks routinely exceed that). When the inner cap IS hit, the runtime
+   * gracefully falls through to the outer worker continuation loop
+   * (see `worker_max_turns`) instead of failing the run, so this is a
+   * cost knob more than a correctness one.
+   */
+  heartbeat_max_inner_turns?: number;
   server?: {
     port: number;
     host?: string;
@@ -92,6 +104,11 @@ export interface IdentityConfig {
    * Shell hooks fired around the worker run lifecycle. Scripts run as
    * `bash -lc <script>` in the agent's root with KYBERBOT_ISSUE_ID,
    * KYBERBOT_AGENT, and KYBERBOT_RUN_STATUS env vars.
+   *
+   * `before_run` failure is non-fatal by default — the run continues and
+   * the failure is recorded in phase_history. Set fatal_on_before_run:
+   * true to revert to the strict Symphony §9.4 semantic where a failed
+   * before_run aborts the attempt.
    */
   hooks?: {
     after_create?: string;
@@ -99,6 +116,7 @@ export interface IdentityConfig {
     after_run?: string;
     before_remove?: string;
     timeout_ms?: number;
+    fatal_on_before_run?: boolean;
   };
   /**
    * Per-agent concurrency limits. `max_concurrent_runs` caps the number
@@ -118,4 +136,28 @@ export interface IdentityConfig {
    * SDK turns (tool-use rounds within one call) are unaffected.
    */
   worker_max_turns?: number;
+  /**
+   * Runtime loop / fruitless-turn detection. The runtime watches the
+   * stream-json events from the Claude subprocess. If the agent issues
+   * the same tool call with identical args N times in a row, or N
+   * consecutive tool calls return errors, the subprocess is killed and
+   * the run is marked BLOCKED with the loop reason in phase_history.
+   * Defaults are conservative — disable by setting enabled: false.
+   */
+  loop_detection?: {
+    enabled?: boolean;
+    max_identical_tool_calls?: number;
+    max_consecutive_tool_errors?: number;
+  };
+  /**
+   * Transient-error retry policy for the inner Claude subprocess call.
+   * If the subprocess errors mid-turn (network blip, SDK glitch), the
+   * runtime retries with exponential backoff before failing the run.
+   * Defaults: 3 attempts total, base 10s, doubling, capped at 5min.
+   */
+  worker_subprocess_retry?: {
+    max_attempts?: number;
+    base_backoff_ms?: number;
+    max_backoff_ms?: number;
+  };
 }

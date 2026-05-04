@@ -171,7 +171,10 @@ export function listRuns(filters: RunFilters = {}): HeartbeatRun[] {
   const params: (string | number)[] = [];
 
   if (filters.agent_name) {
-    conditions.push('agent_name = ?');
+    // Case-insensitive: registry stores names lowercased (e.g. 'arcana')
+    // but heartbeat_runs.agent_name comes from the org chart with whatever
+    // casing the user authored ('Arcana'). Match insensitively to bridge.
+    conditions.push('LOWER(agent_name) = LOWER(?)');
     params.push(filters.agent_name);
   }
   if (filters.type) {
@@ -216,11 +219,18 @@ export function countRecentFailures(agentName: string, issueId: number): number 
 
 /**
  * Mark any runs stuck in 'running' status as failed after a fleet restart.
+ * Returns the affected count plus the distinct agent names — callers use
+ * the agent list to immediately re-dispatch heartbeats so the recovered
+ * work resumes within seconds rather than waiting for the next tick.
  */
-export function recoverStuckRuns(): number {
+export function recoverStuckRuns(): { count: number; agentNames: string[] } {
   const db = getOrchDb();
+  const stuck = db.prepare(
+    "SELECT DISTINCT agent_name FROM heartbeat_runs WHERE status='running'"
+  ).all() as Array<{ agent_name: string }>;
+  const agentNames = stuck.map(r => r.agent_name).filter(Boolean);
   const result = db.prepare(
     "UPDATE heartbeat_runs SET status='failed', error='Fleet restarted during execution', finished_at=datetime('now') WHERE status='running'"
   ).run();
-  return result.changes;
+  return { count: result.changes, agentNames };
 }

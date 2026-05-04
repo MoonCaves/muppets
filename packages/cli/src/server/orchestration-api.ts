@@ -54,12 +54,45 @@ export function createOrchestrationRouter(
 ): Router {
   const router = Router();
 
-  // Recover from crashes on startup
+  // Recover from crashes on startup, then re-dispatch heartbeats for
+  // affected agents so their in-progress work resumes within seconds
+  // rather than waiting for the next scheduled heartbeat tick.
   try {
-    const stuckIssues = recoverStuckIssues();
-    const stuckRuns = recoverStuckRuns();
-    if (stuckIssues > 0 || stuckRuns > 0) {
-      logger.info('Startup recovery', { stuckIssues, stuckRuns });
+    const issuesResult = recoverStuckIssues();
+    const runsResult = recoverStuckRuns();
+    if (issuesResult.count > 0 || runsResult.count > 0) {
+      logger.info('Startup recovery', {
+        stuckIssues: issuesResult.count,
+        stuckRuns: runsResult.count,
+        affectedAgents: [...new Set([...issuesResult.assignees, ...runsResult.agentNames])],
+      });
+    }
+
+    // Re-dispatch on a small delay so the rest of fleet startup completes
+    // first (routers wired, agents started). 1.5s is plenty.
+    if (agentIdentities && (issuesResult.assignees.length > 0 || runsResult.agentNames.length > 0)) {
+      const affected = new Set<string>([...issuesResult.assignees, ...runsResult.agentNames].map(s => s.toLowerCase()));
+      setTimeout(() => {
+        for (const lower of affected) {
+          let identity: AgentIdentity | undefined;
+          for (const [k, v] of agentIdentities.entries()) {
+            if (k.toLowerCase() === lower) { identity = v; break; }
+          }
+          if (!identity) continue;
+          const orgNode = getOrgChart().find(n => n.agent_name.toLowerCase() === lower);
+          if (!orgNode) continue;
+          try {
+            if (orgNode.is_ceo) {
+              queueCeoHeartbeat(identity.root, orgNode.agent_name, runCeoHeartbeat);
+            } else {
+              queueWorkerHeartbeat(identity.root, orgNode.agent_name, orgNode.role, orgNode.title || orgNode.agent_name);
+            }
+            logger.info(`Recovery re-dispatch fired for ${orgNode.agent_name}`);
+          } catch (err) {
+            logger.warn(`Recovery re-dispatch failed for ${orgNode.agent_name}`, { error: String(err) });
+          }
+        }
+      }, 1500).unref?.();
     }
   } catch { /* DB might not be initialized yet */ }
 

@@ -136,17 +136,17 @@ export function getClaudeModel(): string {
 
 /**
  * Get the model to use for heartbeat (scheduled task execution) and the
- * orchestration CEO/worker heartbeats. Sonnet by default — heartbeat is
- * tool-use orchestration, not deep reasoning. Override with
- * `heartbeat_model: haiku|sonnet|opus` in identity.yaml. Reading from a
- * specific root so fleet-mode callers can resolve the right config.
+ * orchestration CEO/worker heartbeats. Opus by default — heartbeats are
+ * where agents do their real long-running work (multi-pass refactors,
+ * audits, research) and they need the strongest model. Override with
+ * `heartbeat_model: haiku|sonnet|opus` in identity.yaml.
  */
 export function getHeartbeatModelForRoot(root: string): 'haiku' | 'sonnet' | 'opus' {
   try {
     const raw = getIdentityForRoot(root).heartbeat_model;
     if (raw === 'haiku' || raw === 'sonnet' || raw === 'opus') return raw;
   } catch { /* fall through */ }
-  return 'sonnet';
+  return 'opus';
 }
 
 export function getHeartbeatModel(): 'haiku' | 'sonnet' | 'opus' {
@@ -154,7 +154,65 @@ export function getHeartbeatModel(): 'haiku' | 'sonnet' | 'opus' {
     const raw = getIdentity().heartbeat_model;
     if (raw === 'haiku' || raw === 'sonnet' || raw === 'opus') return raw;
   } catch { /* fall through */ }
-  return 'sonnet';
+  return 'opus';
+}
+
+/**
+ * Inner SDK max-turns for one Claude call within a heartbeat. Default 50.
+ * Read from identity.yaml; falls back when not set or invalid.
+ */
+export function getHeartbeatMaxInnerTurnsForRoot(root: string): number {
+  try {
+    const raw = getIdentityForRoot(root).heartbeat_max_inner_turns;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+  } catch { /* fall through */ }
+  return 50;
+}
+
+export interface LoopDetectionConfig {
+  enabled: boolean;
+  maxIdenticalToolCalls: number;
+  maxConsecutiveToolErrors: number;
+}
+
+/**
+ * Resolve loop-detection config for an agent root. Defaults to enabled
+ * with conservative thresholds (3 identical calls, 5 consecutive errors).
+ */
+export function getLoopDetectionConfigForRoot(root: string): LoopDetectionConfig {
+  try {
+    const raw = getIdentityForRoot(root).loop_detection ?? {};
+    return {
+      enabled: raw.enabled !== false,
+      maxIdenticalToolCalls: typeof raw.max_identical_tool_calls === 'number' && raw.max_identical_tool_calls >= 1
+        ? Math.floor(raw.max_identical_tool_calls) : 3,
+      maxConsecutiveToolErrors: typeof raw.max_consecutive_tool_errors === 'number' && raw.max_consecutive_tool_errors >= 1
+        ? Math.floor(raw.max_consecutive_tool_errors) : 5,
+    };
+  } catch { /* fall through */ }
+  return { enabled: true, maxIdenticalToolCalls: 3, maxConsecutiveToolErrors: 5 };
+}
+
+export interface SubprocessRetryConfig {
+  maxAttempts: number;
+  baseBackoffMs: number;
+  maxBackoffMs: number;
+}
+
+/**
+ * Resolve transient-error retry policy. Defaults: 3 attempts, 10s base,
+ * exponential backoff capped at 5 minutes (Symphony §8.4 formula).
+ */
+export function getSubprocessRetryConfigForRoot(root: string): SubprocessRetryConfig {
+  try {
+    const raw = getIdentityForRoot(root).worker_subprocess_retry ?? {};
+    return {
+      maxAttempts: typeof raw.max_attempts === 'number' && raw.max_attempts >= 1 ? Math.floor(raw.max_attempts) : 3,
+      baseBackoffMs: typeof raw.base_backoff_ms === 'number' && raw.base_backoff_ms >= 0 ? raw.base_backoff_ms : 10_000,
+      maxBackoffMs: typeof raw.max_backoff_ms === 'number' && raw.max_backoff_ms >= 0 ? raw.max_backoff_ms : 300_000,
+    };
+  } catch { /* fall through */ }
+  return { maxAttempts: 3, baseBackoffMs: 10_000, maxBackoffMs: 300_000 };
 }
 
 /**

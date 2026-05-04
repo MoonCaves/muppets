@@ -354,11 +354,11 @@ export async function runCeoHeartbeat(root: string, agentName: string): Promise<
 
     transitionPhase(runId, RunPhase.LaunchingAgent);
     const client = getClaudeClient();
-    const { getHeartbeatModelForRoot } = await import('../config.js');
+    const { getHeartbeatModelForRoot, getHeartbeatMaxInnerTurnsForRoot } = await import('../config.js');
     transitionPhase(runId, RunPhase.InitializingSession);
     transitionPhase(runId, RunPhase.StreamingTurn);
     const result = await client.complete(prompt, {
-      maxTurns: 15,
+      maxTurns: getHeartbeatMaxInnerTurnsForRoot(root),
       subprocess: true,
       cwd: root,
       model: getHeartbeatModelForRoot(root),
