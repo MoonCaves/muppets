@@ -71,6 +71,9 @@ export function getOrchDb(): Database.Database {
     if (!inboxColumnNames.has('kind')) {
       conn.exec("ALTER TABLE inbox ADD COLUMN kind TEXT NOT NULL DEFAULT 'needs_action'");
     }
+    // Index lives here (not in SCHEMA) so first-boot of v1.9.3+ on an
+    // existing DB applies the ALTER above before referencing the column.
+    conn.exec("CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox(kind)");
   } catch (err) {
     // Close and rethrow — do NOT cache a broken connection
     try { conn.close(); } catch { /* ignore */ }
@@ -221,7 +224,9 @@ const SCHEMA = `
     FOREIGN KEY (related_issue_id) REFERENCES issues(id)
   );
   CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox(status);
-  CREATE INDEX IF NOT EXISTS idx_inbox_kind ON inbox(kind);
+  -- Note: idx_inbox_kind is created in the migration block (after the
+  -- ALTER TABLE that adds the column) so existing DBs upgrading from
+  -- pre-v1.9.3 don't trip "no such column: kind" on first SCHEMA exec.
 
   -- Activity log (append-only audit trail)
   CREATE TABLE IF NOT EXISTS activity_log (
