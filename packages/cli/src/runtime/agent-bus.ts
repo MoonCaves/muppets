@@ -49,7 +49,7 @@ export class AgentBus extends EventEmitter {
   private handlers = new Map<string, AgentMessageHandler>();
   private remoteAgents = new Map<string, RemoteAgent>();
   private sendCounts = new Map<string, { count: number; resetAt: number }>();
-  private readonly MAX_SENDS_PER_HOUR = 10;
+  private readonly MAX_SENDS_PER_HOUR = 20;
   private pendingNotifications = new Map<string, AgentMessage[]>();
   private subscriptions: Array<{ subscriber: string; from: string; topic: string }> = [];
 

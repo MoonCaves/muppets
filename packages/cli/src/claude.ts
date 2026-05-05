@@ -345,35 +345,35 @@ export class ClaudeClient {
       //   metadata.tags                → string[] persisted to request_tags
       //     (budget enforcement via POST /tag/new + max_budget; hard 400 on cap).
       //
-      // Sentinel B verified `metadata.spend_logs_metadata` round-trips
-      // verbatim to spend_logs_metadata. Top-level `metadata.{call_site,...}`
-      // is silently dropped by the proxy (Sentinel A failure mode). We forward
-      // the nested object via `extra_body` to stay TS-clean against OpenAI SDK
-      // 4.104 (whose typed `metadata` field is Record<string,string> only) and
-      // to document intent — these are proxy-specific extensions, not OpenAI fields.
+      // `metadata` MUST be top-level in the request body, NOT inside extra_body.
+      // LiteLLM recognises top-level `metadata` as a proxy-only param and strips
+      // it before forwarding to the provider. If it rides inside extra_body the
+      // SDK sends `"extra_body": {...}` as a literal JSON key; LiteLLM forwards
+      // that key verbatim and Anthropic rejects with "Extra inputs are not
+      // permitted". Cast to `any` because the OpenAI SDK v4 typed surface does
+      // not include LiteLLM-specific top-level params.
       //
       // `stream: false` is asserted both at the call site (typed false)
       // and at the response shape — Phase C invariant: completeProxy()
       // never streams. If a future caller flips this without rewriting
       // the .choices access path below, the runtime guard catches it
       // before silent breakage. 2-line cost, removes a footgun.
-      const response = await this.proxy.chat.completions.create({
+      const proxyParams: any = {
         model,
         messages,
         max_tokens: maxTokens,
         stream: false as const,
-        extra_body: {
-          metadata: {
-            spend_logs_metadata: {
-              agent_root: agentRoot,
-              agent_name: agentName,
-              call_site: callSite,
-              caller,
-            },
-            tags: [`caller:${caller}`, `agent:${agentName}`],
+        metadata: {
+          spend_logs_metadata: {
+            agent_root: agentRoot,
+            agent_name: agentName,
+            call_site: callSite,
+            caller,
           },
+          tags: [`caller:${caller}`, `agent:${agentName}`],
         },
-      });
+      };
+      const response = await this.proxy.chat.completions.create(proxyParams);
 
       // Phase C non-streaming invariant — guard before .choices access.
       if (response && typeof (response as any)[Symbol.asyncIterator] === 'function') {
