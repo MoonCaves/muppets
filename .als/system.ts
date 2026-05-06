@@ -6,7 +6,7 @@ export const system = defineSystem({
   "modules": {
     "kyberbot-factory": {
       "path": "kyberbot-factory/jobs",
-      "version": 1,
+      "version": 2,
       "description": "factory for kyberbot",
       "skills": [
         "kyberbot-factory-console",

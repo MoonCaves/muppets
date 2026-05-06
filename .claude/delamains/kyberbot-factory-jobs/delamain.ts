@@ -72,6 +72,18 @@ export const delamain = defineDelamain({
       "resumable": false,
       "path": "agents/in-review.md"
     },
+    "testing": {
+      "phase": "implementation",
+      "actor": "agent",
+      "provider": "openai",
+      "resumable": true,
+      "session-field": "testing_session",
+      "path": "agents/testing.md"
+    },
+    "test-input": {
+      "phase": "implementation",
+      "actor": "operator"
+    },
     "done": {
       "phase": "closed",
       "terminal": true
@@ -102,7 +114,11 @@ export const delamain = defineDelamain({
     { "class": "rework", "from": "dev", "to": "planning" },
     { "class": "advance", "from": "dev", "to": "in-review" },
     { "class": "rework", "from": "in-review", "to": "dev" },
-    { "class": "exit", "from": "in-review", "to": "done" },
+    { "class": "advance", "from": "in-review", "to": "testing" },
+    { "class": "advance", "from": "testing", "to": "test-input" },
+    { "class": "exit", "from": "testing", "to": "done" },
+    { "class": "rework", "from": "test-input", "to": "dev" },
+    { "class": "exit", "from": "test-input", "to": "done" },
     {
       "class": "exit",
       "from": [
@@ -115,7 +131,9 @@ export const delamain = defineDelamain({
         "planning-gate",
         "plan-input",
         "dev",
-        "in-review"
+        "in-review",
+        "testing",
+        "test-input"
       ],
       "to": "shelved"
     },
@@ -131,7 +149,9 @@ export const delamain = defineDelamain({
         "planning-gate",
         "plan-input",
         "dev",
-        "in-review"
+        "in-review",
+        "testing",
+        "test-input"
       ],
       "to": "cancelled"
     }

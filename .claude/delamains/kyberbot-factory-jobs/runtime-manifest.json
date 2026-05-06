@@ -2,7 +2,7 @@
   "schema": "als-delamain-runtime-manifest@1",
   "delamain_name": "kyberbot-factory-jobs",
   "module_id": "kyberbot-factory",
-  "module_version": 1,
+  "module_version": 2,
   "module_mount_path": "kyberbot-factory/jobs",
   "entity_name": "job",
   "entity_path": "{id}.md",
@@ -17,7 +17,8 @@
     "planning": "anthropic",
     "planning-gate": "anthropic",
     "dev": "anthropic",
-    "in-review": "anthropic"
+    "in-review": "anthropic",
+    "testing": "openai"
   },
   "limits": {
     "maxTurns": 100,

@@ -58,6 +58,16 @@ states:
     provider: anthropic
     path: agents/in-review.md
     resumable: false
+  testing:
+    phase: implementation
+    actor: agent
+    provider: openai
+    path: agents/testing.md
+    resumable: true
+    session-field: testing_session
+  test-input:
+    phase: implementation
+    actor: operator
   done:
     terminal: true
     phase: closed
@@ -116,8 +126,20 @@ transitions:
   - class: rework
     from: in-review
     to: dev
-  - class: exit
+  - class: advance
     from: in-review
+    to: testing
+  - class: advance
+    from: testing
+    to: test-input
+  - class: exit
+    from: testing
+    to: done
+  - class: rework
+    from: test-input
+    to: dev
+  - class: exit
+    from: test-input
     to: done
   - class: exit
     from:
@@ -131,6 +153,8 @@ transitions:
       - plan-input
       - dev
       - in-review
+      - testing
+      - test-input
     to: shelved
   - class: exit
     from:
@@ -144,4 +168,6 @@ transitions:
       - plan-input
       - dev
       - in-review
+      - testing
+      - test-input
     to: cancelled

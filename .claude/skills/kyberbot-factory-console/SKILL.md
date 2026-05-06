@@ -24,6 +24,7 @@ Scan `kyberbot-factory/jobs/` for jobs in operator-owned states:
 | `draft-input` | Draft gate flagged missing detail — operator must fill in PURPOSE / REQUIREMENTS / type before pipeline can start |
 | `research-input` | Research agent has questions |
 | `plan-input` | Planning agent has questions |
+| `test-input` | Testing agent failed the suite, couldn't author a needed test, or hit ambiguity — operator triages |
 
 Newly-filed jobs (state `drafted`) are not in the attention queue — they are picked up by the dispatcher and routed by the `draft-gate` agent. If the gate finds the job sufficient, it advances straight to `research`; if not, the job lands in `draft-input` for operator clarification.
 
@@ -67,6 +68,7 @@ What "do the work" means depends on the state:
 | `draft-input` | Read the latest `draft-gate:` ACTIVITY_LOG entry to see which sufficiency checks failed. Walk the operator through filling in the missing pieces (PURPOSE, REQUIREMENTS, type) directly in the job file. Then advance back through `drafted` so the gate re-evaluates. |
 | `research-input` | Answer research agent questions (read RESEARCH_QUESTIONS, present to operator, collect answers, append) |
 | `plan-input` | Answer planner agent questions (read PLAN_QUESTIONS, present to operator, collect answers, append) |
+| `test-input` | Read the latest dated entry in TESTS plus the most recent `testing:` ACTIVITY_LOG line. Present the failure / ambiguity narrative to the operator. The triage path is: rework → `dev` (failures the dev agent should fix) or advance → `done` (operator override — known flake, environment-only failure, accepted gap). There is no rework-to-testing transition; if the operator wants the testing agent to retry, they pick rework → dev with a no-op note for the dev agent. |
 
 Phase 1 is guided, not delegated. Walk the operator through each step — present one question at a time, collect the response, run verification where possible, then move to the next. The agent is an active partner, not a questionnaire.
 

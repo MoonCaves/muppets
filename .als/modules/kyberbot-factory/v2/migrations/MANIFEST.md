@@ -10,7 +10,7 @@ from_version: 1
 to_version: 2
 change_class: schema_and_logic
 data_migration_required: true
-status: staged
+status: migrated
 created_on: 2026-05-06
 updated_on: 2026-05-06
 ---
