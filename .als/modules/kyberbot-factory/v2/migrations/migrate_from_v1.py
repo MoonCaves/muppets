@@ -50,13 +50,13 @@ MODULE_DATA_RELATIVE_PATH = "kyberbot-factory/jobs"
 
 NEW_TESTS_BLOCK = "## TESTS\n\nnull\n\n"
 TESTING_SESSION_FRONTMATTER_LINE = "testing_session: null"
-DEV_SESSION_FRONTMATTER_LINE = "dev_session: null"
 
 REVIEW_HEADING_RE = re.compile(r"^## REVIEW\s*$", re.MULTILINE)
 DEPLOYMENT_HEADING_RE = re.compile(r"^## DEPLOYMENT\s*$", re.MULTILINE)
 TESTS_HEADING_RE = re.compile(r"^## TESTS\s*$", re.MULTILINE)
 FRONTMATTER_BOUNDARY_RE = re.compile(r"^---\s*$", re.MULTILINE)
 TESTING_SESSION_RE = re.compile(r"^testing_session\s*:", re.MULTILINE)
+DEV_SESSION_ANCHOR_RE = re.compile(r"^dev_session\s*:.*$", re.MULTILINE)
 
 
 class MigrationError(RuntimeError):
@@ -91,20 +91,23 @@ def resolve_module_data_dir(root: Path) -> Path:
 
 def split_frontmatter(text: str) -> tuple[str, str, str]:
     """Return (before_fm, fm_body, after_fm) where fm_body is the YAML between
-    the two '---' fences, exclusive."""
+    the two '---' fences (exclusive of the fences themselves), and `before_fm`
+    ends at the start of the YAML body (immediately after the trailing newline
+    of the opening fence)."""
     boundaries = list(FRONTMATTER_BOUNDARY_RE.finditer(text))
     if len(boundaries) < 2:
         raise MigrationError("frontmatter not found (expected two '---' fences)")
     first = boundaries[0]
     second = boundaries[1]
-    before_fm = text[: first.end()] + "\n"
     fm_body = text[first.end() : second.start()]
+    before_fm = text[: first.end()]
     after_fm = text[second.start() :]
     return before_fm, fm_body, after_fm
 
 
 def add_testing_session_field(fm_body: str) -> tuple[str, bool]:
-    """Add `testing_session: null` immediately after `dev_session: null`.
+    """Add `testing_session: null` immediately after the `dev_session:` line
+    (regardless of the dev_session value — null or UUID, both are valid).
     Returns (new_fm_body, changed)."""
     if TESTING_SESSION_RE.search(fm_body):
         return fm_body, False
@@ -113,13 +116,13 @@ def add_testing_session_field(fm_body: str) -> tuple[str, bool]:
     inserted = False
     for line in lines:
         out.append(line)
-        if not inserted and line.strip() == DEV_SESSION_FRONTMATTER_LINE:
+        if not inserted and DEV_SESSION_ANCHOR_RE.fullmatch(line):
             out.append(TESTING_SESSION_FRONTMATTER_LINE)
             inserted = True
     if not inserted:
         raise MigrationError(
-            f"could not anchor on '{DEV_SESSION_FRONTMATTER_LINE}' to insert "
-            f"testing_session field"
+            "could not anchor on a 'dev_session:' frontmatter line to insert "
+            "testing_session field"
         )
     return "\n".join(out) + ("\n" if fm_body.endswith("\n") else ""), True
 
