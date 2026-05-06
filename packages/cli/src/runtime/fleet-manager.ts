@@ -140,6 +140,7 @@ export class FleetManager {
           name: s.name,
           status: s.status,
           services: s.services,
+          lastBeat: s.lastBeat,
         })),
         sleep: {
           currentAgent: this.sleepScheduler?.getCurrentAgent() || null,
@@ -377,6 +378,7 @@ export class FleetManager {
             memory: {},
             pid: process.pid,
             node_version: process.version,
+            lastBeat: s.lastBeat,
           });
         });
 
