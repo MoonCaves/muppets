@@ -17,6 +17,7 @@ import { createBusApiRouter } from './bus-api.js';
 import { createArpRouter } from './arp/router.js';
 import { chatSseHandler } from './chat-sse.js';
 import { executeHandler } from './execute-api.js';
+import { createOpenAiShimRouter } from './openai-shim.js';
 import { Channel } from './channels/types.js';
 import { createLogger } from '../logger.js';
 
@@ -85,6 +86,12 @@ export function createAgentRouter(root: string, channels: Channel[]): Router {
   // gates whether the call happens; this router enforces scope at the
   // brain.
   router.use('/api/arp', createArpRouter(root));
+
+  // ── OpenAI-compatible shim ─────────────────────────────────────────
+  // Exposes /v1/chat/completions and /v1/models so Open WebUI (and
+  // other OpenAI-compatible clients) can point here instead of Haiku.
+  // Step 2 stub — bearer auth + real Claude translation in steps 3-4.
+  router.use('/', createOpenAiShimRouter());
 
   return router;
 }
