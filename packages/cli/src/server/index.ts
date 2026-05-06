@@ -12,6 +12,7 @@ import { createLogger } from '../logger.js';
 import { getServerPort, getIdentity, getRoot } from '../config.js';
 import { authMiddleware, getApiToken } from '../middleware/auth.js';
 import { createAgentRouter, mountWebUi } from './agent-router.js';
+import { createOpenAiShimRouter } from './openai-shim.js';
 import { ServiceHandle } from '../types.js';
 import { TelegramChannel } from './channels/telegram.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
@@ -56,6 +57,11 @@ export async function startServer(options: {
 
   // Serve web UI static files BEFORE auth (browsers don't send Bearer tokens on page loads)
   mountWebUi(app, '');
+
+  // OpenAI-compatible shim — mounts BEFORE the global KyberBot authMiddleware so
+  // Open WebUI (and other OpenAI clients) don't need the KyberBot API token.
+  // The shim enforces its own bearer auth via OPENAI_SHIM_TOKEN.
+  app.use('/', createOpenAiShimRouter());
 
   // Mount all agent routes via shared agent-router (authenticated)
   app.use('/', authMiddleware, createAgentRouter(root, channels));
