@@ -26,6 +26,7 @@ import {
   getRegisteredAgents,
   getAgentNameFromRoot,
   getRegistryDir,
+  resolveAgentRoot,
 } from '../registry.js';
 
 const PRIMARY = chalk.hex('#10b981');
@@ -71,6 +72,60 @@ function getRunningPid(name: string): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse a turn-count CLI argument. Accepts whole positive integers (≥ 1) only.
+ * Rejects fractions, zero, negatives, and non-numeric input.
+ *
+ * Aligns with the resolver guardrail in `getHeartbeatMaxInnerTurnsForRoot`
+ * (`Number.isFinite(raw) && raw >= 1`) but tightens it at the CLI boundary
+ * to forbid silent floor of fractional inputs.
+ */
+export function parseTurnCount(input: string): number {
+  if (typeof input !== 'string' || input.trim() === '') {
+    throw new Error(`Invalid turn count "${input}". Must be a positive integer (≥ 1).`);
+  }
+  const parsed = Number(input);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`Invalid turn count "${input}". Must be a positive integer (≥ 1).`);
+  }
+  return parsed;
+}
+
+/**
+ * Resolve the target agent root + display name for `fleet set-turns` /
+ * `fleet get-turns`. Errors out for remote agents (identity.yaml is not
+ * locally accessible) or missing identity.yaml.
+ */
+async function resolveTargetRoot(agentFlag?: string): Promise<{ root: string; name: string }> {
+  let root: string;
+  if (agentFlag) {
+    // If the input is a registry name (not path-like), check the registry
+    // entry up-front for a remote-type guard before hitting the filesystem.
+    const isPathLike =
+      agentFlag.includes('/') || agentFlag.startsWith('~') || agentFlag.startsWith('.');
+    if (!isPathLike) {
+      const registry = loadRegistry();
+      const entry = registry.agents[agentFlag.toLowerCase()];
+      if (entry && entry.type === 'remote') {
+        throw new Error(
+          `Cannot mutate identity.yaml on remote agent "${agentFlag}". Set the turn limit on the agent host instead.`
+        );
+      }
+    }
+    root = resolveAgentRoot(agentFlag);
+  } else {
+    const { getRoot } = await import('../config.js');
+    root = getRoot();
+  }
+
+  if (!root || !existsSync(join(root, 'identity.yaml'))) {
+    throw new Error(`No identity.yaml found at ${root || '<unresolved root>'}.`);
+  }
+
+  const name = getAgentNameFromRoot(root);
+  return { root, name };
 }
 
 async function probeHealth(port: number, remoteUrl?: string): Promise<boolean> {
@@ -541,6 +596,83 @@ export function createFleetCommand(): Command {
         } else {
           console.log(DIM('No auto-start defaults set. All agents will start with `fleet start`.'));
         }
+      }
+    });
+
+  // ─────────────────────────────────────────────────────────────
+  // fleet set-turns <n>
+  // ─────────────────────────────────────────────────────────────
+  const turnsHelpText = `
+Field: heartbeat_max_inner_turns in <agent>/identity.yaml
+Default: 50
+Consumers:
+  - worker heartbeat (packages/cli/src/orchestration/worker-heartbeat.ts)
+  - CEO heartbeat    (packages/cli/src/orchestration/ceo-heartbeat.ts)
+Does NOT affect:
+  - worker_max_turns (outer worker continuation loop, default 5)
+  - per-agent sub-agent maxTurns (use \`kyberbot agent create --max-turns\`
+    or edit agents/<name>/agent.yaml)
+`;
+
+  fleet
+    .command('set-turns')
+    .description('Set the inner Claude SDK turn cap (heartbeat_max_inner_turns) for the targeted agent. Default 50.')
+    .argument('<n>', 'Maximum inner turns per heartbeat (positive integer)')
+    .option('--agent <name>', 'Target agent (registry name or path). Defaults to current directory.')
+    .addHelpText('after', turnsHelpText)
+    .action(async (n: string, options: { agent?: string }) => {
+      try {
+        const parsed = parseTurnCount(n);
+        const { root, name } = await resolveTargetRoot(options.agent);
+
+        const identityPath = join(root, 'identity.yaml');
+        const raw = readFileSync(identityPath, 'utf-8');
+        const identity = (yaml.load(raw) as Record<string, unknown>) || {};
+        identity.heartbeat_max_inner_turns = parsed;
+        writeFileSync(identityPath, yaml.dump(identity, { lineWidth: 120 }), 'utf-8');
+
+        const { clearIdentityCache } = await import('../config.js');
+        clearIdentityCache(root);
+
+        console.log(PRIMARY(`Set inner turn limit to ${parsed} for agent ${name}`));
+        console.log(DIM('Takes effect on next heartbeat.'));
+      } catch (error) {
+        console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+      }
+    });
+
+  // ─────────────────────────────────────────────────────────────
+  // fleet get-turns
+  // ─────────────────────────────────────────────────────────────
+  fleet
+    .command('get-turns')
+    .description('Show the effective inner Claude SDK turn cap (heartbeat_max_inner_turns) for the targeted agent.')
+    .option('--agent <name>', 'Target agent (registry name or path). Defaults to current directory.')
+    .addHelpText('after', turnsHelpText)
+    .action(async (options: { agent?: string }) => {
+      try {
+        const { root, name } = await resolveTargetRoot(options.agent);
+
+        const identityPath = join(root, 'identity.yaml');
+        const raw = readFileSync(identityPath, 'utf-8');
+        const identity = (yaml.load(raw) as Record<string, unknown>) || {};
+        const explicit = identity.heartbeat_max_inner_turns;
+        const isExplicit =
+          typeof explicit === 'number' && Number.isFinite(explicit) && explicit >= 1;
+
+        const { getHeartbeatMaxInnerTurnsForRoot } = await import('../config.js');
+        const effective = getHeartbeatMaxInnerTurnsForRoot(root);
+
+        console.log(PRIMARY(`${effective}`) + ` inner turns for agent ${name}`);
+        if (isExplicit) {
+          console.log(DIM('Source: heartbeat_max_inner_turns in identity.yaml'));
+        } else {
+          console.log(DIM('Source: default fallback (heartbeat_max_inner_turns not set in identity.yaml)'));
+        }
+      } catch (error) {
+        console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
       }
     });
 
