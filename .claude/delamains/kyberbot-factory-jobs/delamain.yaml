@@ -1,0 +1,147 @@
+phases:
+  - research
+  - implementation
+  - closed
+states:
+  drafted:
+    initial: true
+    phase: research
+    actor: agent
+    provider: anthropic
+    path: agents/draft-gate.md
+    resumable: false
+  draft-input:
+    phase: research
+    actor: operator
+  research:
+    phase: research
+    actor: agent
+    provider: anthropic
+    path: agents/research.md
+    resumable: true
+    session-field: research_session
+  research-gate:
+    phase: research
+    actor: agent
+    provider: anthropic
+    path: agents/research-gate.md
+    resumable: false
+  research-input:
+    phase: research
+    actor: operator
+  planning:
+    phase: research
+    actor: agent
+    provider: anthropic
+    path: agents/planning.md
+    resumable: true
+    session-field: planner_session
+  planning-gate:
+    phase: research
+    actor: agent
+    provider: anthropic
+    path: agents/planning-gate.md
+    resumable: false
+  plan-input:
+    phase: research
+    actor: operator
+  dev:
+    phase: implementation
+    actor: agent
+    provider: anthropic
+    path: agents/dev.md
+    resumable: true
+    session-field: dev_session
+  in-review:
+    phase: implementation
+    actor: agent
+    provider: anthropic
+    path: agents/in-review.md
+    resumable: false
+  done:
+    terminal: true
+    phase: closed
+  shelved:
+    terminal: true
+    phase: closed
+  cancelled:
+    terminal: true
+    phase: closed
+transitions:
+  - class: advance
+    from: drafted
+    to: research
+  - class: advance
+    from: drafted
+    to: draft-input
+  - class: advance
+    from: draft-input
+    to: drafted
+  - class: advance
+    from: research
+    to: research-gate
+  - class: advance
+    from: research-gate
+    to: research-input
+  - class: advance
+    from: research-gate
+    to: planning
+  - class: rework
+    from: research-input
+    to: research
+  - class: advance
+    from: research-input
+    to: planning
+  - class: advance
+    from: planning
+    to: planning-gate
+  - class: advance
+    from: planning-gate
+    to: plan-input
+  - class: advance
+    from: planning-gate
+    to: dev
+  - class: rework
+    from: plan-input
+    to: planning
+  - class: advance
+    from: plan-input
+    to: dev
+  - class: rework
+    from: dev
+    to: planning
+  - class: advance
+    from: dev
+    to: in-review
+  - class: rework
+    from: in-review
+    to: dev
+  - class: exit
+    from: in-review
+    to: done
+  - class: exit
+    from:
+      - drafted
+      - draft-input
+      - research
+      - research-gate
+      - research-input
+      - planning
+      - planning-gate
+      - plan-input
+      - dev
+      - in-review
+    to: shelved
+  - class: exit
+    from:
+      - drafted
+      - draft-input
+      - research
+      - research-gate
+      - research-input
+      - planning
+      - planning-gate
+      - plan-input
+      - dev
+      - in-review
+    to: cancelled
