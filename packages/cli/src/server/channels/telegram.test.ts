@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock logger
 vi.mock('../../logger.js', () => ({
@@ -69,6 +69,7 @@ const mockBotOn = vi.fn();
 const mockBotStart = vi.fn();
 const mockBotStop = vi.fn();
 const mockSendMessage = vi.fn(async () => {});
+const mockSendChatAction = vi.fn(async () => {});
 vi.mock('grammy', () => ({
   Bot: vi.fn().mockImplementation(() => ({
     on: mockBotOn,
@@ -76,6 +77,7 @@ vi.mock('grammy', () => ({
     stop: mockBotStop,
     api: {
       sendMessage: mockSendMessage,
+      sendChatAction: mockSendChatAction,
     },
   })),
 }));
@@ -374,6 +376,157 @@ describe('TelegramChannel', () => {
       expect(mockClearHistory).toHaveBeenCalledWith('telegram:12345');
       expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('TestBot'));
       expect(mockComplete).not.toHaveBeenCalled(); // Should not route to Claude
+    });
+  });
+
+  describe('long-running affordance', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should not send ack or typing when complete() resolves before threshold', async () => {
+      // Default mockComplete resolves synchronously to 'Mock response'
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
+      await channel.start();
+
+      const messageHandler = mockBotOn.mock.calls[0][1];
+      const ctx = {
+        chat: { id: 12345 },
+        from: { id: 1, username: 'owner' },
+        message: { text: 'fast question', message_id: 1, date: Math.floor(Date.now() / 1000) },
+        reply: vi.fn(),
+      };
+
+      // Drive the handler to completion before the 1500ms threshold elapses.
+      const handlerPromise = messageHandler(ctx);
+      await handlerPromise;
+
+      // Advance past the threshold to make sure no late-firing timer kicks in.
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // Only the final reply should have been sent. No ack, no chat-action.
+      expect(ctx.reply).toHaveBeenCalledTimes(1);
+      expect(ctx.reply).toHaveBeenCalledWith('Mock response');
+      expect(mockSendChatAction).not.toHaveBeenCalled();
+    });
+
+    it('should fire ack + typing and refresh while complete() runs long, then stop', async () => {
+      // Make complete() return a promise we control.
+      let resolveComplete: (value: string) => void = () => {};
+      mockComplete.mockImplementation(
+        () => new Promise<string>((r) => { resolveComplete = r; })
+      );
+
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
+      await channel.start();
+
+      const messageHandler = mockBotOn.mock.calls[0][1];
+      const ctx = {
+        chat: { id: 12345 },
+        from: { id: 1, username: 'owner' },
+        message: { text: 'long task', message_id: 1, date: Math.floor(Date.now() / 1000) },
+        reply: vi.fn(),
+      };
+
+      const handlerPromise = messageHandler(ctx);
+
+      // Before threshold: no affordance has fired.
+      await vi.advanceTimersByTimeAsync(1499);
+      expect(ctx.reply).not.toHaveBeenCalled();
+      expect(mockSendChatAction).not.toHaveBeenCalled();
+
+      // Cross the threshold: ack + initial typing fire.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ctx.reply).toHaveBeenCalledWith('Starting on it…');
+      expect(mockSendChatAction).toHaveBeenCalledWith(12345, 'typing');
+      const sendChatActionCallsAfterAck = mockSendChatAction.mock.calls.length;
+      expect(sendChatActionCallsAfterAck).toBe(1);
+
+      // One refresh tick fires another sendChatAction.
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(mockSendChatAction.mock.calls.length).toBe(sendChatActionCallsAfterAck + 1);
+
+      // Complete the task; cleanup should clear the refresh interval.
+      resolveComplete('Final answer');
+      await handlerPromise;
+
+      const callsAfterComplete = mockSendChatAction.mock.calls.length;
+      // Further timer advancement should NOT trigger more refresh calls.
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(mockSendChatAction.mock.calls.length).toBe(callsAfterComplete);
+
+      // Final reply went out.
+      expect(ctx.reply).toHaveBeenCalledWith('Final answer');
+    });
+
+    it('should stop the typing loop when complete() throws', async () => {
+      let rejectComplete: (reason: Error) => void = () => {};
+      mockComplete.mockImplementation(
+        () => new Promise<string>((_resolve, reject) => { rejectComplete = reject; })
+      );
+
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
+      await channel.start();
+
+      const messageHandler = mockBotOn.mock.calls[0][1];
+      const ctx = {
+        chat: { id: 12345 },
+        from: { id: 1, username: 'owner' },
+        message: { text: 'will fail', message_id: 1, date: Math.floor(Date.now() / 1000) },
+        reply: vi.fn(),
+      };
+
+      const handlerPromise = messageHandler(ctx);
+
+      // Cross threshold — typing loop is now active.
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(mockSendChatAction).toHaveBeenCalledTimes(1);
+
+      // Reject the Claude call.
+      rejectComplete(new Error('boom'));
+      await handlerPromise;
+
+      const callsAfterReject = mockSendChatAction.mock.calls.length;
+
+      // The error reply went out and refresh loop has stopped.
+      expect(ctx.reply).toHaveBeenCalledWith('Sorry, I encountered an error processing your message.');
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(mockSendChatAction.mock.calls.length).toBe(callsAfterReject);
+    });
+
+    it('should not crash the task when sendChatAction rejects', async () => {
+      mockSendChatAction.mockRejectedValueOnce(new Error('network'));
+
+      let resolveComplete: (value: string) => void = () => {};
+      mockComplete.mockImplementation(
+        () => new Promise<string>((r) => { resolveComplete = r; })
+      );
+
+      channel = new TelegramChannel({ bot_token: 'test-token', owner_chat_id: 12345 }, '/tmp/test-root');
+      await channel.start();
+
+      const messageHandler = mockBotOn.mock.calls[0][1];
+      const ctx = {
+        chat: { id: 12345 },
+        from: { id: 1, username: 'owner' },
+        message: { text: 'long task', message_id: 1, date: Math.floor(Date.now() / 1000) },
+        reply: vi.fn(),
+      };
+
+      const handlerPromise = messageHandler(ctx);
+
+      // Cross threshold — initial sendChatAction rejects but is caught.
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(mockSendChatAction).toHaveBeenCalledTimes(1);
+
+      // Resolve and await — final reply must still be delivered.
+      resolveComplete('All good');
+      await expect(handlerPromise).resolves.toBeUndefined();
+      expect(ctx.reply).toHaveBeenCalledWith('All good');
     });
   });
 
