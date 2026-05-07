@@ -17,6 +17,7 @@ coverage/
 .claude/settings.local.json
 .claude/scripts/.cache/
 .claude/delamains/*/status.json
+.claude/delamains/.runtime/
 .claude/delamains/*/runtime/
 .claude/delamains/*/telemetry/
 .claude/scheduled_tasks.lock
