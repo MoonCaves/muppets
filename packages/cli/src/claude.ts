@@ -426,6 +426,14 @@ export class ClaudeClient {
         }
       });
 
+      // Additive observability: 'exit' fires before stdio is drained, so it
+      // complements 'close' rather than replacing it. Catches PM2 SIGKILL of
+      // parent, ENOMEM kills, fast-exit-before-stdio-drain, and wedge cases
+      // where 'close' stalls. No resolve/reject here — close handler owns that.
+      proc.on('exit', (code, signal) => {
+        logger.info('subprocess:exit', { code, signal, duration_ms_exit: Date.now() - startTime });
+      });
+
       proc.on('error', (err) => {
         chunks.length = 0;
         errChunks.length = 0;
