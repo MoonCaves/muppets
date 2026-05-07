@@ -21,8 +21,8 @@
  * ── Phase progression ─────────────────────────────────────────────────────────
  *   Step 2  — stub response, hard-coded body, proves the route wires up.
  *   Step 3  — bearer-auth middleware (OPENAI_SHIM_TOKEN env var).
- *   Step 4  (current) — real Claude SDK translation (non-streaming).
- *   Step 5  — SSE streaming when request.stream === true.
+ *   Step 4  — real Claude SDK translation (non-streaming).
+ *   Step 5  (current) — SSE streaming when request.stream === true.
  *   Step 6  — Open WebUI wiring + model dropdown.
  *   Step 7  — rate-limit, error mapping, README, handoff to Rizzo.
  */
@@ -189,32 +189,148 @@ function shimAuthMiddleware(req: Request, res: Response, next: NextFunction): vo
 // ── Route handlers ─────────────────────────────────────────────────────────────
 
 /**
- * POST /v1/chat/completions — Step 4: real Claude SDK translation (non-streaming).
+ * POST /v1/chat/completions (stream: true) — Step 5: SSE streaming.
  *
- * Converts OpenAI messages → Claude messages, calls the Anthropic SDK directly
- * (in-process, not via subprocess), and returns an OpenAI-shaped response.
+ * Sets `Content-Type: text/event-stream` and streams Anthropic SDK events
+ * translated into OpenAI-compatible SSE chunks.  Follows the OpenAI spec:
  *
- * stream: true → clean 400 (Step 5 will handle it).
+ *   1. Role-announcement chunk  { delta: { role: "assistant", content: "" } }
+ *   2. N text-delta chunks      { delta: { content: "..." } }
+ *   3. Final chunk              { delta: {}, finish_reason: "stop" }
+ *   4. Sentinel line            data: [DONE]
+ *
+ * Used by OpenWebUI and any SSE-aware OpenAI client.  NOT used by Telegram,
+ * sleep agent, n8n, or other non-human-facing consumers (they send stream:false
+ * or omit the field, and the non-streaming path handles them).
+ *
+ * After SSE headers are flushed we can't change the HTTP status code.  Errors
+ * that occur mid-stream are surfaced as an error-shaped data chunk followed by
+ * [DONE] so the client can detect and report them cleanly.
+ */
+async function chatCompletionsStreamHandler(req: Request, res: Response): Promise<void> {
+  const body = req.body as OpenAIChatRequest;
+  const requestedModel = body.model ?? DEFAULT_MODEL_ID;
+  const modelId = MODEL_MAP[requestedModel] ?? DEFAULT_MODEL_ID;
+
+  logger.info('POST /v1/chat/completions (stream)', { requestedModel, resolvedModel: modelId });
+
+  // Initialise client BEFORE setting SSE headers so we can still return a
+  // clean JSON 500 if ANTHROPIC_API_KEY is missing.
+  let client: any;
+  try {
+    client = await getAnthropicClient();
+  } catch (err) {
+    logger.error('Anthropic client init failed — ANTHROPIC_API_KEY missing?', { error: String(err) });
+    res.status(500).json({
+      error: {
+        message: 'ANTHROPIC_API_KEY is not configured on this server. Set it in .env and restart KyberBot.',
+        type: 'server_error',
+        code: 'missing_api_key',
+      },
+    });
+    return;
+  }
+
+  const { system, messages } = convertMessages(body.messages ?? []);
+
+  // Set SSE headers.  X-Accel-Buffering: no prevents nginx from buffering the
+  // stream and causing OpenWebUI to wait for the entire response.
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const completionId = `chatcmpl-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+
+  function sendChunk(delta: Record<string, unknown>, finishReason: string | null = null): void {
+    if (res.writableEnded) return;
+    const payload = {
+      id: completionId,
+      object: 'chat.completion.chunk',
+      created,
+      model: requestedModel,
+      choices: [
+        {
+          index: 0,
+          delta,
+          logprobs: null,
+          finish_reason: finishReason,
+        },
+      ],
+    };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  }
+
+  try {
+    const stream = await client.messages.create({
+      model: modelId,
+      max_tokens: body.max_tokens ?? 4096,
+      ...(system ? { system } : {}),
+      messages,
+      stream: true,
+    });
+
+    // Role-announcement — OpenWebUI requires this as the first chunk.
+    sendChunk({ role: 'assistant', content: '' });
+
+    let stopReason: string | null = null;
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+        sendChunk({ content: event.delta.text });
+      } else if (event.type === 'message_delta' && event.delta?.stop_reason) {
+        stopReason = event.delta.stop_reason;
+      }
+    }
+
+    // Final chunk with mapped finish_reason + [DONE] sentinel.
+    sendChunk({}, mapFinishReason(stopReason));
+    if (!res.writableEnded) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  } catch (err: any) {
+    logger.error('Anthropic stream error', { error: String(err) });
+    // Can't change status after headers are sent.  Surface the error as a
+    // data chunk so the client can detect and report it, then close cleanly.
+    if (!res.writableEnded) {
+      res.write(
+        `data: ${JSON.stringify({
+          error: {
+            message: err?.message ?? 'Upstream stream error',
+            type: 'api_error',
+            code: 'stream_error',
+          },
+        })}\n\n`,
+      );
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+}
+
+/**
+ * POST /v1/chat/completions — Step 5: dispatch to streaming or non-streaming path.
+ *
+ * stream: true  → chatCompletionsStreamHandler (SSE, for OpenWebUI)
+ * stream: false / absent → non-streaming JSON (for Telegram, n8n, sleep agent,
+ *                          and any batch/JSON-mode consumer)
+ *
  * Temperature and top_p are accepted but ignored for now (Step 6).
  */
 async function chatCompletionsHandler(req: Request, res: Response): Promise<void> {
   const body = req.body as OpenAIChatRequest;
 
   if (body.stream) {
-    res.status(400).json({
-      error: {
-        message: 'Streaming is not yet supported by this shim. Set stream: false or omit the field.',
-        type: 'invalid_request_error',
-        code: 'streaming_not_supported',
-      },
-    });
-    return;
+    return chatCompletionsStreamHandler(req, res);
   }
 
   const requestedModel = body.model ?? DEFAULT_MODEL_ID;
   const modelId = MODEL_MAP[requestedModel] ?? DEFAULT_MODEL_ID;
 
-  logger.info('POST /v1/chat/completions', { requestedModel, resolvedModel: modelId });
+  logger.info('POST /v1/chat/completions (non-stream)', { requestedModel, resolvedModel: modelId });
 
   let client: any;
   try {
@@ -299,6 +415,16 @@ function listModelsHandler(_req: Request, res: Response): void {
 }
 
 // ── Router factory ─────────────────────────────────────────────────────────────
+
+/**
+ * Reset the lazy Anthropic client singleton.
+ * Exported for use in tests only — allows per-test env-var toggling of
+ * ANTHROPIC_API_KEY without needing to reset the entire module.
+ * @internal
+ */
+export function _resetAnthropicClientForTesting(): void {
+  _anthropic = null;
+}
 
 export function createOpenAiShimRouter(): Router {
   const router = Router();
