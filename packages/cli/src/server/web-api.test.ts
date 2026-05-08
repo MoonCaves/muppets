@@ -107,13 +107,17 @@ describe('GET /memory/:block', () => {
     expect(res.body.error).toContain('Invalid block');
   });
 
-  it('should return 404 when file not found', async () => {
+  it('should return 200 with empty content when file not found', async () => {
+    // ENOENT is treated as "block not yet authored" — handler returns 200 + empty
+    // content so the UI renders an editable empty block instead of an error state.
     const err = new Error('ENOENT') as NodeJS.ErrnoException;
     err.code = 'ENOENT';
     mockReadFileSync.mockImplementation(() => { throw err; });
 
     const res = await request(app).get('/memory/soul');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('');
+    expect(res.body.lastModified).toBe('');
   });
 
   it('should return 500 on other read errors', async () => {

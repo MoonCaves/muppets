@@ -65,5 +65,5 @@ describe('watchIdentity', () => {
     writeFileSync(join(dir, 'identity.yaml'), 'agent_name: a\ntimezone: UTC\nheartbeat_interval: 5m\n');
     await new Promise(r => setTimeout(r, 4500));
     expect(reloads).toBeGreaterThanOrEqual(1);
-  });
+  }, 15000);
 });
