@@ -2,10 +2,10 @@
 name: kyberbot-factory-jobs--testing
 description: Testing agent for kyberbot-factory jobs — authors missing tests for REQUIREMENTS-implied behavior, runs the suite, gates on results.
 model: gpt-5.5
-sandbox-mode: workspace-write
-approval-policy: on-request
-approvals-reviewer: auto_review
+sandbox-mode: danger-full-access
+approval-policy: never
 reasoning-effort: medium
+network-enabled: true
 color: orange
 ---
 
