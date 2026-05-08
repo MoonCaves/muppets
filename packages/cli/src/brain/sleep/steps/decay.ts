@@ -95,9 +95,24 @@ export async function runDecayStep(
 
         const newDecay = Math.min(config.maxDecay, (item.decay_score || 0) + effectiveDecayBoost);
 
+        // FadeMem saturating boost (arxiv 2601.18642): β × f/(1+f) bounds growth so boost
+        // at f→∞ approaches β and can never exceed it, making priority immortality impossible.
+        //
+        // β derivation from config.ts (recalibrate if any of these constants change):
+        //   decayBoost       = min(maxDecay × 0.2, cycleHours × decayRatePerHour)
+        //                    = min(1.0 × 0.2, 3h × 0.002) = min(0.20, 0.006) = 0.006  [normal]
+        //   effectiveBoost   = 0.006 × repetitiveDecayMultiplier(3) = 0.018             [repetitive]
+        //   decayPenalty     = effectiveBoost / 2 = 0.009                               [repetitive]
+        //   β = 0.009  →  at f→∞, accessBoost = 0.009, exactly cancels one repetitive
+        //                  decay cycle. Boost for normal content is proportionally smaller.
+        //
+        // Coupling: maxDecay × 0.2 (line 88), decayRatePerHour, repetitiveDecayMultiplier.
+        // If any change: β = (min(maxDecay×0.2, cycleHours×decayRatePerHour) × repetitiveDecayMultiplier) / 2
+        const f = item.access_count || 0;
+        const beta = 0.009;
         const accessBoost = isRepetitiveContent(item.title || '')
           ? 0  // repetitive content doesn't benefit from access count
-          : Math.min(0.3, (item.access_count || 0) * 0.05);
+          : beta * f / (1 + f);
         const decayPenalty = effectiveDecayBoost / 2;
         const newPriority = Math.max(0, Math.min(1, (item.priority ?? 0.5) - decayPenalty + accessBoost));
 
