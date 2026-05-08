@@ -1,0 +1,30 @@
+{
+  "schema": "als-delamain-runtime-manifest@1",
+  "delamain_name": "kyberbot-factory-jobs",
+  "module_id": "kyberbot-factory",
+  "module_version": 2,
+  "module_mount_path": "kyberbot-factory/jobs",
+  "entity_name": "job",
+  "entity_path": "{id}.md",
+  "status_field": "status",
+  "discriminator_field": null,
+  "discriminator_value": null,
+  "submodules": [],
+  "state_providers": {
+    "drafted": "anthropic",
+    "research": "anthropic",
+    "research-gate": "anthropic",
+    "planning": "anthropic",
+    "planning-gate": "anthropic",
+    "dev": "anthropic",
+    "in-review": "anthropic",
+    "testing": "openai"
+  },
+  "limits": {
+    "maxTurns": 100,
+    "maxBudgetUsdByProvider": {
+      "anthropic": 30,
+      "openai": 100
+    }
+  }
+}

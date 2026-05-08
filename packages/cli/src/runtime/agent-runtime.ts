@@ -20,6 +20,7 @@ import { ServiceHandle } from '../types.js';
 import { IdentityConfig } from '../types.js';
 import { AgentBus } from './agent-bus.js';
 import { watchIdentity, IdentityWatcher } from './identity-watcher.js';
+import { getLastBeat } from '../services/heartbeat.js';
 
 const logger = createLogger('agent-runtime');
 
@@ -46,6 +47,11 @@ export interface AgentRuntimeStatus {
     embeddings: 'running' | 'disabled';
   };
   uptime: number;
+  /**
+   * ISO 8601 timestamp of the most recent heartbeat tick for this agent,
+   * or `null` if the heartbeat loop has not yet fired (or is disabled).
+   */
+  lastBeat: string | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -246,6 +252,7 @@ export class AgentRuntime {
    * Get current status.
    */
   getStatus(): AgentRuntimeStatus {
+    const lastBeatMs = getLastBeat(this.root);
     return {
       name: this.name,
       root: this.root,
@@ -261,6 +268,7 @@ export class AgentRuntime {
         embeddings: this.embeddingsReady ? 'running' : 'disabled',
       },
       uptime: this.startedAt ? Date.now() - this.startedAt : 0,
+      lastBeat: lastBeatMs ? new Date(lastBeatMs).toISOString() : null,
     };
   }
 

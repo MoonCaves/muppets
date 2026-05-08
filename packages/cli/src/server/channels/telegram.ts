@@ -26,6 +26,20 @@ import { pushUserMessage, pushAssistantMessage, buildPromptWithHistory, clearHis
 
 const logger = createLogger('telegram');
 
+/** Delay before treating a Claude-routed message as "long-running".
+ *  If complete() returns within this window, no acknowledgement or typing
+ *  indicator is sent — the bot just replies normally. */
+const LONG_RUNNING_DELAY_MS = 1500;
+
+/** Refresh interval for Telegram's `typing` chat-action.
+ *  Telegram clears the typing indicator after ~5s of inactivity, so we
+ *  re-send it at 4s with a 1s safety margin. */
+const TYPING_REFRESH_MS = 4000;
+
+/** Fixed acknowledgement string emitted once the long-running threshold
+ *  is crossed. Per operator decision Q2, no echo / no per-message restate. */
+const STARTING_ACK = 'Starting on it…';
+
 export interface TelegramConfig {
   bot_token: string;
   owner_chat_id?: number;
@@ -123,6 +137,7 @@ export class TelegramChannel implements Channel {
       } else {
         // Default: route to agent with conversation history
         const convoId = `telegram:${chatId}`;
+        const stopAffordance = this.startLongRunningAffordance(ctx, chatId);
         try {
           const client = getClaudeClient();
           const prompt = buildPromptWithHistory(convoId, text);
@@ -160,6 +175,8 @@ export class TelegramChannel implements Channel {
         } catch (error) {
           logger.error('Failed to process Telegram message', { error: String(error) });
           await ctx.reply('Sorry, I encountered an error processing your message.');
+        } finally {
+          stopAffordance();
         }
       }
     });
@@ -196,6 +213,58 @@ export class TelegramChannel implements Channel {
   }
 
   // ── Private helpers ──────────────────────────────────────────────────
+
+  /**
+   * Start the "long-running" responsiveness affordance for a Claude-routed
+   * Telegram message. Schedules an acknowledgement reply + typing indicator
+   * to fire after `LONG_RUNNING_DELAY_MS`; if work completes before that,
+   * the returned cleanup is a no-op. Once active, the typing indicator is
+   * refreshed every `TYPING_REFRESH_MS` (Telegram clears it after ~5s).
+   *
+   * Returns an idempotent `cleanup()` closure: callers must invoke it
+   * (typically in a `finally` block) to clear both timers regardless of
+   * success / failure / throw. All Telegram API errors are logged and
+   * swallowed so they cannot crash the user-visible task.
+   */
+  private startLongRunningAffordance(ctx: any, chatId: number): () => void {
+    let startTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+    startTimer = setTimeout(async () => {
+      // Threshold crossed — fire the ack reply, then start the typing loop.
+      try {
+        await ctx.reply(STARTING_ACK);
+      } catch (err) {
+        logger.warn('Telegram ack reply failed', { error: String(err) });
+      }
+
+      try {
+        await this.bot?.api.sendChatAction(chatId, 'typing');
+      } catch (err) {
+        logger.warn('Telegram sendChatAction failed', { error: String(err) });
+      }
+
+      // Refresh the typing indicator before Telegram's ~5s TTL elapses.
+      // Use .catch (not await) so a transient failure on a tick logs but
+      // never crashes the timer or surfaces as an unhandledRejection.
+      refreshTimer = setInterval(() => {
+        this.bot?.api.sendChatAction(chatId, 'typing').catch((err) =>
+          logger.warn('Telegram sendChatAction refresh failed', { error: String(err) })
+        );
+      }, TYPING_REFRESH_MS);
+    }, LONG_RUNNING_DELAY_MS);
+
+    return () => {
+      if (startTimer !== null) {
+        clearTimeout(startTimer);
+        startTimer = null;
+      }
+      if (refreshTimer !== null) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+    };
+  }
 
   private saveOwnerChatId(chatId: number): void {
     try {

@@ -29,6 +29,20 @@ let busy = false;
 // This tracks when the last orchestration tick ran per agent.
 const lastOrchTick = new Map<string, number>();
 
+// Tracks the wall-clock time of the most recent `tick(root)` invocation,
+// regardless of whether it short-circuited (busy lane, outside active hours,
+// no due tasks). Answers "is the heartbeat loop alive" — surfaced via
+// `getLastBeat(root)` and rendered by `kyberbot fleet status`.
+const lastBeatByRoot = new Map<string, number>();
+
+/**
+ * Wall-clock time (ms) of the most recent heartbeat tick for the given
+ * agent root, or `null` if the loop has not fired yet.
+ */
+export function getLastBeat(root: string): number | null {
+  return lastBeatByRoot.get(root) ?? null;
+}
+
 function parseIntervalMs(intervalStr: string): number {
   const match = intervalStr.match(/^(\d+)(m|h)$/);
   return match
@@ -119,6 +133,10 @@ export async function startHeartbeat(root: string): Promise<ServiceHandle> {
 }
 
 async function tick(root: string): Promise<void> {
+  // Record every tick — even ones that short-circuit below — so `lastBeat`
+  // answers "is the timer alive," not "did Claude run."
+  lastBeatByRoot.set(root, Date.now());
+
   // Skip if user is actively chatting
   if (busy) {
     logger.debug('Skipping heartbeat — user session is active');
