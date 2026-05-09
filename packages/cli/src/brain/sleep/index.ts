@@ -15,7 +15,7 @@ import { createLogger } from '../../logger.js';
 import { ServiceHandle } from '../../types.js';
 import { getSleepDb, initializeSleepDb } from './db.js';
 import { SleepConfig, DEFAULT_CONFIG } from './config.js';
-import { runDecayStep, DecayResult } from './steps/decay.js';
+import { runDecayStep as upstreamRunDecayStep, DecayResult } from './steps/decay.js';
 import { runTagStep, TagResult } from './steps/tag.js';
 import { runLinkStep, LinkResult } from './steps/link.js';
 import { runTierStep, TierResult } from './steps/tier.js';
@@ -26,6 +26,34 @@ import { runObserveStep, ObserveResult } from './steps/observe.js';
 import { runProfileStep, ProfileResult } from './steps/profile.js';
 import { runReasoningStep, ReasoningResult } from './steps/reasoning.js';
 import { saveCheckpoint } from './utils/checkpoint.js';
+import { getTimelineDb } from '../timeline.js';
+import { makeWrappedDecayStep } from './fork-extensions/integration.js';
+
+// GAP-REVIVAL EXTENSION POINT — last verified 2026-05-09 against v1.9.5
+//
+// ASSUMES: runDecayStep is the only decay function exported from
+//   ./steps/decay.js that resolves the module-scope binding at
+//   call sites in this file. One wrap covers all call sites.
+//
+// ASSUMES: getTimelineDb is exported from ../timeline.js and accepts
+//   (root: string) — verified at timeline.ts line 249 on v1.9.5.
+//
+// TO RE-VERIFY (run at every rebase):
+//   grep -n "runDecayStep" packages/cli/src/brain/sleep/index.ts
+//     Expected: 1 import line + N call sites resolving this binding.
+//   grep -n "getTimelineDb" packages/cli/src/brain/timeline.ts
+//     Expected: exported, async, accepts (root: string).
+//
+// IF ASSUMPTION BREAKS:
+//   Upstream split decay → re-evaluate which names need wrapping.
+//   runDecayStep renamed → update alias + verify wrap target.
+//   getTimelineDb moved/re-signed → update import path + wrapper call.
+//
+// LAZY BOOT: initGapRevival fires on first wrapper invocation.
+//   No explicit boot call needed in this file.
+// SEE ALSO: ./fork-extensions/REATTACHMENT.md — full reattachment checklist
+//   for verifying this extension still works against new upstream releases.
+const runDecayStep = makeWrappedDecayStep(upstreamRunDecayStep, getTimelineDb);
 
 const logger = createLogger('sleep-agent');
 
