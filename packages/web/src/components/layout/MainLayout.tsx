@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import Header from './Header';
+import Header, { getAgentEmoji } from './Header';
 import Sidebar from './Sidebar';
 import { formatModelName } from '../../utils/model';
 import ChatArea from '../chat/ChatArea';
@@ -49,11 +49,8 @@ export default function MainLayout({ token: _token }: MainLayoutProps) {
             <div className="border-b border-slate-200 dark:border-white/10 p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 border border-violet-500/30 dark:border-violet-400/30 bg-violet-500/10 dark:bg-violet-400/10 flex items-center justify-center">
-                  <span
-                    className="text-lg text-violet-600 dark:text-violet-400"
-                    style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 500 }}
-                  >
-                    {agentName.charAt(0).toUpperCase()}
+                  <span className="text-xl leading-none select-none">
+                    {getAgentEmoji(agentName)}
                   </span>
                 </div>
                 <div>

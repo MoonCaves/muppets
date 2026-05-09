@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
 import MainLayout from './components/layout/MainLayout';
+import MuppetsDashboard from './components/dashboard/MuppetsDashboard';
+
+function isMuppetsHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.location.host.startsWith('muppets.');
+}
 
 function TokenPrompt({ onSubmit }: { onSubmit: (token: string) => void }) {
   const [value, setValue] = useState('');
@@ -46,17 +52,18 @@ function TokenPrompt({ onSubmit }: { onSubmit: (token: string) => void }) {
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
+  const muppets = isMuppetsHost();
 
   useEffect(() => {
     // Check for token in URL params (set on first visit)
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get('token');
     if (urlToken) {
-      sessionStorage.setItem('kyberbot_token', urlToken);
+      localStorage.setItem('kyberbot_token', urlToken);
       window.history.replaceState({}, '', window.location.pathname);
       setToken(urlToken);
     } else {
-      setToken(sessionStorage.getItem('kyberbot_token'));
+      setToken(localStorage.getItem('kyberbot_token'));
     }
     setChecked(true);
   }, []);
@@ -73,13 +80,18 @@ export default function App() {
 
   if (!checked) return null;
 
+  // muppets.* is the public agent directory — no token, no chat, just a chooser.
+  if (muppets) {
+    return <MuppetsDashboard />;
+  }
+
   // If no token and auth is likely required, show token prompt
   // First, try a health check to see if auth is even needed
   if (!token) {
     return (
       <TokenPrompt
         onSubmit={(t) => {
-          sessionStorage.setItem('kyberbot_token', t);
+          localStorage.setItem('kyberbot_token', t);
           setToken(t);
         }}
       />

@@ -1,5 +1,5 @@
 const getToken = (): string | null => {
-  return sessionStorage.getItem('kyberbot_token');
+  return localStorage.getItem('kyberbot_token');
 };
 
 const getHeaders = (): HeadersInit => {
