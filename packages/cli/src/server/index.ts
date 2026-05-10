@@ -61,7 +61,7 @@ export async function startServer(options: {
   // OpenAI-compatible shim — mounts BEFORE the global KyberBot authMiddleware so
   // Open WebUI (and other OpenAI clients) don't need the KyberBot API token.
   // The shim enforces its own bearer auth via OPENAI_SHIM_TOKEN.
-  app.use('/', createOpenAiShimRouter());
+  app.use('/', await createOpenAiShimRouter(root));
 
   // Mount all agent routes via shared agent-router (authenticated)
   app.use('/', authMiddleware, createAgentRouter(root, channels));
