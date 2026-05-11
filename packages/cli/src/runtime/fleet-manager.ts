@@ -7,7 +7,7 @@
 
 import express from 'express';
 import http from 'http';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createLogger } from '../logger.js';
 import { getIdentityForRoot, setFleetMode } from '../config.js';
@@ -24,6 +24,41 @@ import { createOrchestrationRouter } from '../server/orchestration-api.js';
 import { createApiV1Router } from '../server/api/v1/router.js';
 
 const logger = createLogger('fleet');
+
+/**
+ * Compute the next-due ISO timestamp for a recurring task.
+ *
+ * Mirrors the schedule semantics in `services/heartbeat.ts:isTaskDue` so the
+ * dashboard and the scheduler agree on what "next fire" means. Returns:
+ *   - "now" (ISO of Date.now()) if the task has never fired or its lastFired
+ *     timestamp is unparseable
+ *   - lastFired + interval for every-N(m|h|d) / daily / weekly / monthly
+ *   - null for an unrecognized schedule string
+ */
+function computeNextDue(schedule: string, lastFiredIso: string | null): string | null {
+  if (!lastFiredIso) return new Date().toISOString();
+  const last = Date.parse(lastFiredIso);
+  if (Number.isNaN(last)) return new Date().toISOString();
+
+  const s = schedule.toLowerCase();
+  const everyMatch = s.match(/every\s+(\d+)\s*(m|h|d)\b/);
+  let intervalMs: number | null = null;
+  if (everyMatch) {
+    const n = Number(everyMatch[1]);
+    const u = everyMatch[2];
+    intervalMs = n * (u === 'm' ? 60_000 : u === 'h' ? 3_600_000 : 86_400_000);
+  } else if (s.startsWith('hourly')) {
+    intervalMs = 3_600_000;
+  } else if (s.startsWith('daily')) {
+    intervalMs = 24 * 3_600_000;
+  } else if (s.startsWith('weekly')) {
+    intervalMs = 7 * 24 * 3_600_000;
+  } else if (s.startsWith('monthly')) {
+    intervalMs = 28 * 24 * 3_600_000;
+  }
+  if (intervalMs === null) return null;
+  return new Date(last + intervalMs).toISOString();
+}
 
 export class FleetManager {
   private agents = new Map<string, AgentRuntime>();
@@ -269,6 +304,91 @@ export class FleetManager {
         history = history.filter(m => m.from === agent || m.to === agent);
       }
       res.json({ messages: history });
+    });
+
+    // GET /fleet/heartbeats — per-agent heartbeat schedule with last_fired
+    // and next_due. Sources:
+    //   schedule  ← <agent.root>/HEARTBEAT.md (### Task → **Schedule**: …)
+    //   last_fired ← <agent.root>/heartbeat-state.json { lastChecks[name] }
+    //   next_due  ← computed from schedule + last_fired
+    // Paused tasks (wrapped in <!-- … -->) are stripped before parsing.
+    this.app.get('/fleet/heartbeats', (_req, res) => {
+      const heartbeats: Array<{
+        agent: string;
+        task: string;
+        schedule: string;
+        window: string;
+        skill: string;
+        priority: string;
+        last_fired: string | null;
+        next_due: string | null;
+        next_fire_estimated: string | null;
+        last_outcome: string;
+        last_outcome_text: string;
+      }> = [];
+
+      for (const [name, agent] of this.agents) {
+        const hbPath = join(agent.root, 'HEARTBEAT.md');
+        if (!existsSync(hbPath)) continue;
+
+        let content: string;
+        try {
+          content = readFileSync(hbPath, 'utf-8');
+        } catch {
+          continue;
+        }
+
+        // Strip HTML comments so paused (<!-- … -->) tasks are ignored.
+        const stripped = content.replace(/<!--[\s\S]*?-->/g, '');
+
+        const statePath = join(agent.root, 'heartbeat-state.json');
+        let lastChecks: Record<string, string> = {};
+        if (existsSync(statePath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(statePath, 'utf-8'));
+            if (parsed && typeof parsed.lastChecks === 'object' && parsed.lastChecks) {
+              lastChecks = parsed.lastChecks as Record<string, string>;
+            }
+          } catch {
+            /* corrupt state file — treat as empty */
+          }
+        }
+
+        const afterTasks = stripped.split(/^##\s+Tasks\b/im)[1];
+        if (!afterTasks) continue;
+        const blocks = afterTasks.split(/^###\s+/m).slice(1);
+
+        for (const block of blocks) {
+          const nameMatch = block.match(/^([^\n]+)/);
+          const scheduleMatch = block.match(/\*\*Schedule\*\*:\s*([^\n]+)/i);
+          if (!nameMatch || !scheduleMatch) continue;
+
+          const taskName = nameMatch[1].trim();
+          const schedule = scheduleMatch[1].trim();
+          const windowMatch = block.match(/\*\*Window\*\*:\s*([^\n]+)/i);
+          const skillMatch = block.match(/\*\*Skill\*\*:\s*([^\n]+)/i);
+          const priorityMatch = block.match(/\*\*Priority\*\*:\s*([^\n]+)/i);
+
+          const lastFired = lastChecks[taskName] ?? null;
+          const nextDue = computeNextDue(schedule, lastFired);
+
+          heartbeats.push({
+            agent: name,
+            task: taskName,
+            schedule,
+            window: windowMatch?.[1].trim() ?? '',
+            skill: skillMatch?.[1].trim() ?? '',
+            priority: priorityMatch?.[1].trim() ?? '',
+            last_fired: lastFired,
+            next_due: nextDue,
+            next_fire_estimated: nextDue,
+            last_outcome: '',
+            last_outcome_text: '',
+          });
+        }
+      }
+
+      res.json({ heartbeats });
     });
 
     // ── Orchestration API ───────────────────────────────────────────
