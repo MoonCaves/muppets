@@ -68,7 +68,7 @@ export default function ChatArea({
         {/* Live streaming bubble */}
         {isStreaming && (
           <div className="flex justify-start">
-            <div className="max-w-[80%] px-4 py-3 bg-slate-100 dark:bg-white/[0.02] border streaming-pulse">
+            <div className="max-w-[80%] min-w-0 break-words px-4 py-3 bg-slate-100 dark:bg-white/[0.02] border streaming-pulse">
               {/* Live tool calls */}
               {streamingTools.length > 0 && (
                 <div className="space-y-1 mb-3">

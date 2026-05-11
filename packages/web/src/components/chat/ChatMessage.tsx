@@ -20,7 +20,7 @@ export default function ChatMessage({ role, content, timestamp, toolCalls, memor
   return (
     <div className={`flex ${role === 'user' ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-[80%] px-4 py-3 ${
+        className={`max-w-[80%] min-w-0 break-words px-4 py-3 ${
           role === 'user'
             ? 'bg-violet-500/10 dark:bg-violet-400/10 border border-violet-500/20 dark:border-violet-400/20'
             : 'bg-slate-100 dark:bg-white/[0.02] border border-slate-200 dark:border-white/10'

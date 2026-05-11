@@ -52,23 +52,30 @@ export default function Header({ agentName, showSettings, onToggleSettings }: He
   const emoji = getAgentEmoji(agentName);
   const accent = getAgentAccent(agentName);
 
+  const protocol = typeof window !== 'undefined' ? window.location.protocol : 'https:';
+  const muppetsUrl = `${protocol}//muppets.remotelyhuman.com`;
+
   return (
     <div className="mb-6 flex items-center justify-between">
       <div className="flex items-center gap-4">
-        <span className="text-base leading-none">{emoji}</span>
         {switchTarget ? (
           <a
             href={switchTarget.url}
-            className="text-[9px] text-slate-500 dark:text-white/40 tracking-[1px] font-mono no-underline hover:text-violet-600 dark:hover:text-violet-400 transition cursor-pointer"
+            className="text-base leading-none no-underline hover:opacity-70 transition cursor-pointer"
             title={`Switch to ${switchTarget.label}`}
           >
-            MUPPETS
+            {emoji}
           </a>
         ) : (
-          <span className="text-[9px] text-slate-500 dark:text-white/40 tracking-[1px] font-mono">
-            MUPPETS
-          </span>
+          <span className="text-base leading-none">{emoji}</span>
         )}
+        <a
+          href={muppetsUrl}
+          className="text-[9px] text-slate-500 dark:text-white/40 tracking-[1px] font-mono no-underline hover:text-violet-600 dark:hover:text-violet-400 transition cursor-pointer"
+          title="Muppets dashboard"
+        >
+          MUPPETS
+        </a>
         <div className="w-px h-4 bg-slate-300 dark:bg-white/10" />
         <div className={`text-[9px] tracking-[2px] font-mono ${accent}`}>
           {'// AGENT_' + agentName.toUpperCase().replace(/\s+/g, '_')}

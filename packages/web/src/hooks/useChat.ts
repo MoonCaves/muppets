@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, ToolCall } from '../api/types';
-import { apiGet, apiPost } from '../api/client';
+import { apiGet, apiPost, getToken } from '../api/client';
 
 let messageIdCounter = 0;
 
@@ -107,7 +107,7 @@ export function useChat() {
     setStreamingStatus('thinking');
     setStreamingTools([]);
 
-    const token = sessionStorage.getItem('kyberbot_token');
+    const token = getToken();
     const controller = new AbortController();
     abortRef.current = () => controller.abort();
 

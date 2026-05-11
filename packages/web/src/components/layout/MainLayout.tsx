@@ -42,9 +42,9 @@ export default function MainLayout({ token: _token }: MainLayoutProps) {
           onToggleSettings={() => {}}
         />
 
-        <div className="flex gap-6 flex-1 min-h-0">
+        <div className="flex gap-6 flex-1 min-h-0 min-w-0">
           {/* Chat Interface */}
-          <div className={`flex-1 border bg-white dark:bg-[#0a0a0a] flex flex-col ${isStreaming ? 'streaming-pulse' : 'border-slate-300 dark:border-white/10'}`}>
+          <div className={`flex-1 min-w-0 border bg-white dark:bg-[#0a0a0a] flex flex-col ${isStreaming ? 'streaming-pulse' : 'border-slate-300 dark:border-white/10'}`}>
             {/* Chat Header */}
             <div className="border-b border-slate-200 dark:border-white/10 p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">

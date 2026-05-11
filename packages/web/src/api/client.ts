@@ -1,4 +1,4 @@
-const getToken = (): string | null => {
+export const getToken = (): string | null => {
   return localStorage.getItem('kyberbot_token');
 };
 

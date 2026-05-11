@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { ServiceStatus } from '../api/types';
+import { getToken } from '../api/client';
 
 export function useStatus() {
   const [status, setStatus] = useState<ServiceStatus | null>(null);
@@ -7,7 +8,7 @@ export function useStatus() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const token = sessionStorage.getItem('kyberbot_token');
+        const token = getToken();
         const res = await fetch('/api/web/status', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });

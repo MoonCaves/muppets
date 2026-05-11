@@ -8,7 +8,7 @@ interface MarkdownRendererProps {
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <div
-      className="text-sm text-slate-800 dark:text-white/90 leading-relaxed max-w-none"
+      className="text-sm text-slate-800 dark:text-white/90 leading-relaxed max-w-none min-w-0 break-words [overflow-wrap:anywhere]"
       style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 300 }}
     >
       <ReactMarkdown
@@ -21,7 +21,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
           ol: ({ children }) => <ol className="my-2 ml-4 list-decimal">{children}</ol>,
           li: ({ children }) => <li className="my-0.5">{children}</li>,
           a: ({ href, children }) => (
-            <a href={href} className="text-cyan-600 dark:text-cyan-400 hover:underline" target="_blank" rel="noopener noreferrer">
+            <a href={href} className="text-cyan-600 dark:text-cyan-400 hover:underline break-all" target="_blank" rel="noopener noreferrer">
               {children}
             </a>
           ),
@@ -29,7 +29,7 @@ export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
           h2: ({ children }) => <h2 className="text-base font-semibold text-slate-900 dark:text-white mt-3 mb-2">{children}</h2>,
           h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-900 dark:text-white mt-2 mb-1">{children}</h3>,
           code: ({ children }) => (
-            <code className="bg-slate-200 dark:bg-white/10 px-1.5 py-0.5 rounded text-cyan-700 dark:text-cyan-300 text-xs font-mono">{children}</code>
+            <code className="bg-slate-200 dark:bg-white/10 px-1.5 py-0.5 rounded text-cyan-700 dark:text-cyan-300 text-xs font-mono break-all">{children}</code>
           ),
           pre: ({ children }) => (
             <pre className="bg-slate-200 dark:bg-black/30 border border-slate-300 dark:border-white/10 p-3 rounded my-2 overflow-x-auto">{children}</pre>
