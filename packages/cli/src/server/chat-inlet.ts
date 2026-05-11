@@ -1,5 +1,5 @@
 /**
- * KyberBot — OpenAI-Compatible Shim
+ * KyberBot — Chat-Inlet
  *
  * Exposes POST /v1/chat/completions so Open WebUI (and other OpenAI-compatible
  * clients) can point at this server instead of a paid proxy.
@@ -8,19 +8,22 @@
  * required beyond the Claude Code subscription already in use.
  *
  * ── ENV VARS ──────────────────────────────────────────────────────────────────
- * OPENAI_SHIM_TOKEN  (required)
+ * CHAT_INLET_TOKEN  (required)
  *   A random bearer token that Open WebUI (or any OpenAI-compatible client)
  *   must send in the Authorization header:
- *       Authorization: Bearer <OPENAI_SHIM_TOKEN>
+ *       Authorization: Bearer <CHAT_INLET_TOKEN>
  *   Generate with: openssl rand -hex 32
  *   Add to the KyberBot .env file (same directory as identity.yaml).
  *   All requests lacking this token receive a 401 with an OpenAI-shape error.
  *
  * ── Phase progression ─────────────────────────────────────────────────────────
  *   Step 2  — stub response, hard-coded body, proves the route wires up.
- *   Step 3  — bearer-auth middleware (OPENAI_SHIM_TOKEN env var).
+ *   Step 3  — bearer-auth middleware (CHAT_INLET_TOKEN env var).
  *   Step 6  — Open WebUI wiring + model dropdown.
  *   Step 7  — rate-limit, error mapping, README, handoff.
+ *   NOTE: Step 5 (SSE streaming, 0e5354c) is committed but may not be wired
+ *         correctly — tests mock @anthropic-ai/sdk directly while the impl
+ *         routes through getClaudeClient() subprocess. Needs validation pass.
  */
 
 import { Router } from 'express';
@@ -28,7 +31,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../logger.js';
 import { getClaudeClient } from '../claude.js';
 
-const logger = createLogger('openai-shim');
+const logger = createLogger('chat-inlet');
 
 // ── Model mapping ──────────────────────────────────────────────────────────────
 // Maps OpenAI model names (and friendly short-names) to kyberbot model names.
@@ -103,14 +106,14 @@ function buildPrompt(messages: OpenAIMessage[]): string {
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
-function shimAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const shimToken = process.env.OPENAI_SHIM_TOKEN;
+function chatInletAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const inletToken = process.env.CHAT_INLET_TOKEN;
 
-  if (!shimToken) {
-    logger.warn('OPENAI_SHIM_TOKEN not set — shim is locked until the env var is configured');
+  if (!inletToken) {
+    logger.warn('CHAT_INLET_TOKEN not set — chat-inlet is locked until the env var is configured');
     res.status(401).json({
       error: {
-        message: 'OpenAI shim is not configured: OPENAI_SHIM_TOKEN env var is missing. Set it in .env and restart KyberBot.',
+        message: 'Chat-Inlet is not configured: CHAT_INLET_TOKEN env var is missing. Set it in .env and restart KyberBot.',
         type: 'invalid_request_error',
         code: 'invalid_api_key',
       },
@@ -121,11 +124,11 @@ function shimAuthMiddleware(req: Request, res: Response, next: NextFunction): vo
   const authHeader = req.headers['authorization'] ?? '';
   const provided = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
 
-  if (provided !== shimToken) {
-    logger.warn('OpenAI shim auth failure', { ip: req.ip });
+  if (provided !== inletToken) {
+    logger.warn('Chat-Inlet auth failure', { ip: req.ip });
     res.status(401).json({
       error: {
-        message: 'Invalid shim token. Check the Authorization: Bearer <OPENAI_SHIM_TOKEN> header.',
+        message: 'Invalid token. Check the Authorization: Bearer <CHAT_INLET_TOKEN> header.',
         type: 'invalid_request_error',
         code: 'invalid_api_key',
       },
@@ -191,7 +194,7 @@ async function chatCompletionsStreamHandler(
       res.end();
     }
   } catch (err: any) {
-    logger.error('Shim subprocess error (stream)', { error: String(err) });
+    logger.error('Chat-Inlet subprocess error (stream)', { error: String(err) });
     if (!res.writableEnded) {
       res.write(
         `data: ${JSON.stringify({
@@ -240,7 +243,7 @@ async function chatCompletionsHandler(root: string): Promise<(req: Request, res:
         system_fingerprint: null,
       });
     } catch (err: any) {
-      logger.error('Shim subprocess error', { error: String(err) });
+      logger.error('Chat-Inlet subprocess error', { error: String(err) });
       res.status(500).json({
         error: {
           message: err?.message ?? 'Subprocess error',
@@ -270,11 +273,11 @@ function listModelsHandler(_req: Request, res: Response): void {
 
 // ── Router factory ─────────────────────────────────────────────────────────────
 
-export async function createOpenAiShimRouter(root: string): Promise<Router> {
+export async function createChatInletRouter(root: string): Promise<Router> {
   const router = Router();
   const completionsHandler = await chatCompletionsHandler(root);
 
-  router.use(shimAuthMiddleware);
+  router.use(chatInletAuthMiddleware);
   router.post('/v1/chat/completions', completionsHandler);
   router.get('/v1/models', listModelsHandler);
 

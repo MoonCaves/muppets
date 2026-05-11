@@ -1,14 +1,16 @@
 /**
- * KyberBot — OpenAI Shim Tests
+ * KyberBot — Chat-Inlet Tests
  *
  * Covers step 3 (auth), step 4 (non-streaming), and step 5 (SSE streaming).
  * The Anthropic SDK is mocked at the module level so no real API calls are made.
+ * NOTE: Step 5 tests mock @anthropic-ai/sdk directly; the impl now routes
+ * through getClaudeClient() subprocess — mocks may not reflect real behaviour.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createOpenAiShimRouter, _resetAnthropicClientForTesting } from './openai-shim.js';
+import { createChatInletRouter, _resetAnthropicClientForTesting } from './chat-inlet.js';
 
 // ── Anthropic SDK mock ────────────────────────────────────────────────────────
 //
@@ -31,12 +33,12 @@ vi.mock('@anthropic-ai/sdk', () => ({
 
 // ── App factory ───────────────────────────────────────────────────────────────
 
-/** Build a fresh Express app with the shim mounted.  Router is shared; state
+/** Build a fresh Express app with Chat-Inlet mounted.  Router is shared; state
  *  (e.g. lazy Anthropic singleton) is reset via _resetAnthropicClientForTesting. */
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use(createOpenAiShimRouter());
+  app.use(createChatInletRouter());
   return app;
 }
 
@@ -68,7 +70,7 @@ async function* makeStreamEvents(text: string, stopReason = 'end_turn') {
 const VALID_TOKEN = 'test-shim-token-abc123';
 
 beforeEach(() => {
-  process.env.OPENAI_SHIM_TOKEN = VALID_TOKEN;
+  process.env.CHAT_INLET_TOKEN = VALID_TOKEN;
   process.env.ANTHROPIC_API_KEY = 'sk-test-key';
   _mock.create = vi.fn();
   _resetAnthropicClientForTesting();
@@ -107,8 +109,8 @@ async function streamRequest(app: express.Express, payload: object): Promise<{ s
 // ── Auth tests ────────────────────────────────────────────────────────────────
 
 describe('Auth middleware', () => {
-  it('returns 401 when OPENAI_SHIM_TOKEN is not set', async () => {
-    delete process.env.OPENAI_SHIM_TOKEN;
+  it('returns 401 when CHAT_INLET_TOKEN is not set', async () => {
+    delete process.env.CHAT_INLET_TOKEN;
     const app = buildApp();
     const res = await request(app)
       .post('/v1/chat/completions')
