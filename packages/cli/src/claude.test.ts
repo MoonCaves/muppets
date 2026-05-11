@@ -1,5 +1,5 @@
 /**
- * KyberBot — Claude completion route (OpenAI-shape proxy) regression sentinels
+ * KyberBot — Model-Interceptor regression sentinels
  *
  * These tests are PERMANENT — not one-shot Phase 1 scaffolding. They
  * lock the wire-shape contract that Phase 1's empirical smoke discovered:

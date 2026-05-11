@@ -2,7 +2,7 @@
  * KyberBot — Claude Abstraction Layer
  *
  * Four routes:
- *   1. completion — OpenAI-shape completion route via configurable proxy endpoint
+ *   1. completion — Model-Interceptor proxy route via configurable endpoint
  *      (Phase 1+ default for brain). Set `caller` (e.g. 'brain') and the call
  *      routes to the proxy unless `_transport: 'subprocess'` is set explicitly.
  *   2. Agent SDK — Uses @anthropic-ai/claude-code (subscription users)
@@ -29,14 +29,14 @@ export interface Message {
  * (`KnownCaller | (string & {})`) — closed unions fight the architectural
  * goal "any LLM on any process". An ESLint rule + runtime metric track
  * unknown caller values; promotion path is documented in
- * `brain/openai-shape-callers.md`.
+ * `brain/model-interceptor-callers.md`.
  */
 export type KnownCaller = 'brain' | 'subagent' | 'skill' | 'eval';
 
 /**
  * Underscored override — set to `'subprocess'` to keep a call on the legacy
  * Claude Code subscription path even when `caller` is set. Set to
- * `'completion'` to force the OpenAI-shape proxy route. Underscored to
+ * `'completion'` to force the Model-Interceptor proxy route. Underscored to
  * signal escape-hatch status; usage outside `claude.ts` and `debug/` is
  * flagged by the ESLint `no-restricted-syntax` rule and emits a runtime
  * warn log on every call.
@@ -76,11 +76,11 @@ export interface CompleteOptions {
   cwd?: string;
 
   // ──────────────────────────────────────────────────────────────────────
-  // Phase 1 completion-route fields (OpenAI-shape proxy)
+  // Phase 1 Model-Interceptor fields (proxy, configurable endpoint)
   // ──────────────────────────────────────────────────────────────────────
 
   /**
-   * Subsystem invoking completion. Required for completion route. Brain
+   * Subsystem invoking completion. Required for Model-Interceptor route. Brain
    * sites pass 'brain'. Sub-agents pass 'subagent'. Skills pass 'skill'.
    * Eval harness passes 'eval'. New string values are accepted (open
    * pattern) but flagged by lint + runtime metric.
@@ -96,7 +96,7 @@ export interface CompleteOptions {
   callSite?: string;
 
   /**
-   * Underscored escape hatch. `'completion'` → OpenAI-shape proxy route.
+   * Underscored escape hatch. `'completion'` → Model-Interceptor proxy route.
    * `'subprocess'` → legacy `claude -p` spawn. When unset, routing is
    * driven by `caller`: any caller routes to completion. Lint flags
    * usage outside claude.ts/debug/.
@@ -123,7 +123,7 @@ const MODEL_IDS: Record<string, string> = {
 };
 
 /**
- * Proxy base URL for the OpenAI-shape completion route.
+ * Proxy base URL for the Model-Interceptor route.
  *
  * Precedence: PROXY_BRAIN_URL → LITELLM_BRAIN_URL (deprecated) → built-in default.
  * LITELLM_BRAIN_URL is accepted as a backward-compat fallback for operators who
@@ -153,7 +153,7 @@ function getProxyBaseUrl(): string {
 }
 
 /**
- * Proxy API key for the OpenAI-shape completion route.
+ * Proxy API key for the Model-Interceptor route.
  *
  * Precedence: PROXY_BRAIN_KEY → LITELLM_BRAIN_KEY (deprecated) → undefined.
  * LITELLM_BRAIN_KEY is accepted as a backward-compat fallback and emits a
@@ -242,10 +242,10 @@ export class ClaudeClient {
   }
 
   /**
-   * Lazy-init the OpenAI-compat HTTP client for the proxy completion route.
+   * Lazy-init the OpenAI-compat HTTP client for the Model-Interceptor route.
    * Cached on first use. If init fails, sets `proxyInitFailed` so subsequent
    * calls hard-fail with a clear message instead of silently retrying. Phase 1
-   * rule: no fallback to subprocess on completion-route failure.
+   * rule: no fallback to subprocess on Model-Interceptor failure.
    */
   private async initProxy(): Promise<void> {
     if (this.proxy || this.proxyInitFailed) return;
@@ -292,13 +292,13 @@ export class ClaudeClient {
       // baseURL, etc.). Flag is set so subsequent calls hard-fail immediately
       // without retrying — no silent retry loop on a broken config.
       this.proxyInitFailed = true;
-      logger.error('Proxy client init failed — completion route disabled', { err });
+      logger.error('Proxy client init failed — Model-Interceptor disabled', { err });
       throw err;
     }
   }
 
   /**
-   * Phase 1 completion route — OpenAI-shape proxy via configurable endpoint.
+   * Phase 1 Model-Interceptor — proxy via configurable endpoint.
    *
    * Hard-fail on any error path. No silent fallback to subprocess. The
    * whole point of this route is universal abstraction; falling back
@@ -472,8 +472,8 @@ export class ClaudeClient {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Phase 1 completion-route dispatch — caller-set OR _transport='completion'
-    // routes to the OpenAI-shape proxy. _transport='subprocess' is an explicit
+    // Phase 1 Model-Interceptor dispatch — caller-set OR _transport='completion'
+    // routes to the Model-Interceptor proxy. _transport='subprocess' is an explicit
     // override that pins to the legacy subprocess path even if caller is set.
     // opts.subprocess (back-compat) also pins subprocess.
     // ──────────────────────────────────────────────────────────────────
