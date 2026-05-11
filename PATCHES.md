@@ -6,7 +6,8 @@
 
 **Last rebase:** 2026-05-09 — `rebase/v1.9.5-2026-05-09` → `main` (fast-forward).
 **Upstream base at rebase:** `upstream/main` ahead-by-0 of our merge-base.
-**Patches in flight:** 5 (table below).
+**Last doc update:** 2026-05-11 — post-triage cleanup, patch 6 added, in-flight projects renamed.
+**Patches in flight:** 6 (table below).
 
 ---
 
@@ -17,8 +18,10 @@
 | 1 | `92c4cd2` | wrapper (test mocks) | 3 test files | +9 / −4 | trivial | dies when 3+4 land upstream |
 | 2 | `986a817` | surgical patch (port) | `commands/bus.ts` | +6 / −5 | low | retire when `getFleetPort()` helper lands upstream |
 | 3 | `50cbc7c` | real patch (schema + LLM) | fact-store, fact-extractor, observe | +129 / −10 | moderate | upstream-ready — PR paused, not currently active |
-| 4 | `fd738c4` | real patch (deep) | 10 files across embeddings, config, channels, runtime | +282 / −29 | **HIGH** | upstream-feasible behind `KYBERBOT_FLEET_MODE` flag |
+| 4 | `fd738c4` | real patch (deep) | 10 files across embeddings, config, channels, runtime | +282 / −29 | **HIGH** | **VERIFY** — Ian may have shipped equivalent fleet isolation; test before next rebase. Was: upstream-feasible behind `KYBERBOT_FLEET_MODE` flag |
 | 5 | `0967b48` | extension (new dir) | 11 files (sleep/index.ts + 10 in fork-extensions/) | +963 / −1 | low-moderate | local extension — not upstream-bound |
+
+| 6 | 91bc936 | bridge patch (web UI) | 5 files in packages/web/src/ | +25 / -17 | **DISCARD** on Ian web update | retire when Open-WebUI replaces kermit/rizzo chat UI |
 
 **Total drift from `upstream/main`:** +1389 / −49 across 25 files.
 
@@ -196,6 +199,21 @@ This lesson is doctrine candidate **#6 doubled** in the post-mortem batch (#231/
 **When the rebase completes:** update the "Last rebase" date and "Upstream base at rebase" SHA at the top.
 
 **When a rebase teaches a new lesson:** add to the "Rebase doctrine" section *and* propagate to `brain/fleet-engineering-doctrine.md`.
+
+---
+
+
+---
+
+## In-flight projects (not yet on production — branches only)
+
+| Project name | Branch | Status | What it does |
+|---|---|---|---|
+| **chat-inlet** | feat/chat-inlet (was feat/openai-shim) | Steps 1-4 done; step 5 streaming wiring unverified | POST /v1/chat/completions inside KyberBot — bridges OpenAI-format → Claude subprocess → Claude Max |
+| **model-interceptor** | feat/model-interceptor (was feat/openai-completion-route) | Built; not on production | claude.ts wrapper that redirects haiku model calls to LiteLLM instead of spawning Claude subprocess |
+| **silent-exit-autopsy** | feat/silent-exit-autopsy (was feat/subprocess-exit-observability) | Built; not on production | subprocess exit-code-1 diagnostics — duration_ms logging, exit event instrumentation |
+
+These are named using the gap-revival pattern (unique two-word names, searchable without false positives).
 
 ---
 
