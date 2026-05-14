@@ -12,6 +12,7 @@
 import { spawn } from 'child_process';
 import { getClaudeMode, getClaudeModel, getClaudeModelForRoot, getRoot, isFleetMode } from './config.js';
 import { createLogger } from './logger.js';
+import OpenAI from 'openai';
 
 const logger = createLogger('claude');
 
@@ -83,6 +84,7 @@ function stableStringify(value: unknown): string {
 export class ClaudeClient {
   private mode: 'agent-sdk' | 'sdk' | 'subprocess';
   private sdk: any | null = null;
+  private litellm: OpenAI | null = null;
 
   constructor() {
     const configMode = getClaudeMode();
@@ -146,6 +148,19 @@ export class ClaudeClient {
       }
     }
 
+    // Route Haiku calls through LiteLLM to preserve Sonnet/Opus subscription quota.
+    // Falls back to subprocess on LiteLLM unavailability or error.
+    // Skip if streaming (onChunk) is requested — LiteLLM path is non-streaming.
+    if (opts.model === 'haiku' && !opts.onChunk && this.getLitellmClient()) {
+      try {
+        const result = await this.completeLitellm(prompt, opts);
+        logger.debug('haiku routed via LiteLLM');
+        return result;
+      } catch (err) {
+        logger.warn('LiteLLM Haiku call failed, falling back to subprocess', { err: String(err) });
+      }
+    }
+
     // All server-process calls should use subprocess for memory isolation.
     // SDK mode is only for direct API calls (ANTHROPIC_API_KEY users).
     if (this.mode === 'sdk' && this.sdk && !opts.subprocess) {
@@ -203,6 +218,33 @@ export class ClaudeClient {
 
     const textBlock = response.content.find((b: any) => b.type === 'text');
     return textBlock?.text || '';
+  }
+
+  private getLitellmClient(): OpenAI | null {
+    if (this.litellm) return this.litellm;
+    const baseURL = process.env.OPENAI_BASE_URL;
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!baseURL || !apiKey) return null;
+    try {
+      this.litellm = new OpenAI({ baseURL, apiKey });
+    } catch {
+      return null;
+    }
+    return this.litellm;
+  }
+
+  private async completeLitellm(prompt: string, opts: CompleteOptions): Promise<string> {
+    const client = this.getLitellmClient();
+    if (!client) throw new Error('LiteLLM client unavailable (OPENAI_BASE_URL or OPENAI_API_KEY not set)');
+    const messages: OpenAI.ChatCompletionMessageParam[] = [];
+    if (opts.system) messages.push({ role: 'system', content: opts.system });
+    messages.push({ role: 'user', content: prompt });
+    const response = await client.chat.completions.create({
+      model: 'haiku',
+      messages,
+      max_tokens: opts.maxTokens ?? 4096,
+    });
+    return response.choices[0]?.message?.content ?? '';
   }
 
   private completeSubprocess(prompt: string, opts: CompleteOptions): Promise<string> {
