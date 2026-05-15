@@ -72,6 +72,7 @@ export class AgentRuntime {
   private embeddingsReady = false;
   private identityWatcher: IdentityWatcher | null = null;
   private currentIdentity: IdentityConfig;
+  private watchedFolders: ServiceHandle | null = null;
 
   constructor(config: AgentRuntimeConfig) {
     this.root = config.root;
@@ -188,6 +189,17 @@ export class AgentRuntime {
       onReload: (next) => { this.currentIdentity = next; },
     });
 
+    // Start watched folders if configured (fleet-safe: uses getIdentityForRoot via root param)
+    if (this.currentIdentity.watched_folders?.some(f => f.enabled !== false)) {
+      try {
+        const { startWatchedFolders } = await import('../services/watched-folders.js');
+        this.watchedFolders = await startWatchedFolders(this.root);
+        logger.info(`Watched folders started for ${this.name}`);
+      } catch (error) {
+        logger.warn(`Watched folders start failed for ${this.name}`, { error: String(error) });
+      }
+    }
+
     this._status = 'running';
     logger.info(`Agent ${this.name} started`, {
       heartbeat: this.heartbeat ? 'running' : 'disabled',
@@ -220,6 +232,12 @@ export class AgentRuntime {
     if (this.heartbeat) {
       await this.heartbeat.stop();
       this.heartbeat = null;
+    }
+
+    // Stop watched folders
+    if (this.watchedFolders) {
+      await this.watchedFolders.stop();
+      this.watchedFolders = null;
     }
 
     // Stop channels

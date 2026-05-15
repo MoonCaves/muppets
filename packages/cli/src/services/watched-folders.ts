@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync, mkdirSync } from 'fs';
 import { join, relative, extname, basename } from 'path';
 import { createLogger } from '../logger.js';
-import { getIdentity, getRoot } from '../config.js';
+import { getIdentityForRoot } from '../config.js'; // fleet-safe: threads root explicitly
 import { storeConversation } from '../brain/store-conversation.js';
 import { removeFromTimeline } from '../brain/timeline.js';
 import type { ServiceHandle } from '../types.js';
@@ -194,7 +194,7 @@ function readFileContent(filePath: string): string | null {
 async function syncCycle(root: string): Promise<{ ingested: number; deleted: number; errors: number }> {
   let identity;
   try {
-    identity = getIdentity();
+    identity = getIdentityForRoot(root);
   } catch {
     // Can't read identity — skip this cycle
     return { ingested: 0, deleted: 0, errors: 0 };
@@ -386,7 +386,7 @@ export function getWatchedFoldersStatus(root: string): Array<{
   lastSync: string | null;
 }> {
   let identity;
-  try { identity = getIdentity(); } catch { return []; }
+  try { identity = getIdentityForRoot(root); } catch { return []; }
 
   const folders = identity.watched_folders || [];
   const state = loadSyncState(root);
