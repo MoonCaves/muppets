@@ -589,12 +589,29 @@ export async function deleteBySourcePaths(
   if (!col) return;
 
   try {
-    await col.delete({
-      where: sourcePaths.length === 1
-        ? { source_path: sourcePaths[0] }
-        : { source_path: { ['$in']: sourcePaths } } as unknown as Record<string, string>,
+    // ChromaDB chunk IDs are {uuid}_chunk_0 (small docs) or {uuid}_seg_N_chunk_0
+    // (segmented docs). The source_path metadata on segments is base/seg_N, not base.
+    // We cannot use $startsWith in ChromaDB where filters, so:
+    // 1. Extract UUIDs from the channel source paths
+    // 2. Fetch ALL chunk IDs from the collection (IDs only, no vectors/documents)
+    // 3. Filter client-side to IDs whose UUID prefix matches ours
+    // 4. Delete by explicit ID list
+    const uuidSet = new Set(sourcePaths.map(sp => sp.split('/').pop()!));
+
+    const allResult = await col.get({ include: [] as any });
+    const idsToDelete = allResult.ids.filter(id => {
+      // ID format: {uuid}_chunk_N or {uuid}_seg_N_chunk_N
+      const uuid = id.split('_')[0];
+      return uuidSet.has(uuid);
     });
-    logger.debug('ChromaDB chunks deleted', { count: sourcePaths.length });
+
+    if (idsToDelete.length === 0) {
+      logger.debug('ChromaDB: no chunks found for cleanup', { sourcePaths });
+      return;
+    }
+
+    await col.delete({ ids: idsToDelete });
+    logger.debug('ChromaDB chunks deleted', { ids: idsToDelete.length, docs: sourcePaths.length });
   } catch (err) {
     logger.warn('ChromaDB chunk deletion failed (non-fatal)', { error: String(err) });
   }
