@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 // ---------- Types ----------
 
@@ -23,7 +23,7 @@ interface Issue {
   parent_id: number | null;
   assigned_to: string | null;
   created_by: string | null;
-  status: 'todo' | 'in_progress' | 'done' | string;
+  status: 'todo' | 'in_progress' | 'in_review' | 'done' | string;
   priority: 'critical' | 'high' | 'medium' | 'low' | string | null;
   labels: string | null;
   due_date: string | null;
@@ -165,84 +165,227 @@ function CampaignPanel({ goals }: { goals: Goal[] }) {
   );
 }
 
-function KanbanPanel({ issues }: { issues: Issue[] }) {
-  const cols: Array<{ key: Issue['status']; label: string }> = [
-    { key: 'todo', label: 'TODO' },
-    { key: 'in_progress', label: 'IN PROGRESS' },
-    { key: 'done', label: 'DONE' },
+interface RejectDialog {
+  issue: Issue;
+  reason: string;
+  submitting: boolean;
+}
+
+function KanbanPanel({
+  issues,
+  onRefresh,
+}: {
+  issues: Issue[];
+  onRefresh: () => void;
+}) {
+  const cols: Array<{ key: string; label: string; labelColor: string }> = [
+    { key: 'todo', label: 'TODO', labelColor: 'text-slate-500 dark:text-white/40' },
+    { key: 'in_progress', label: 'IN PROGRESS', labelColor: 'text-cyan-600 dark:text-cyan-400' },
+    { key: 'in_review', label: 'IN REVIEW', labelColor: 'text-violet-600 dark:text-violet-400' },
+    { key: 'done', label: 'DONE', labelColor: 'text-emerald-600 dark:text-emerald-400' },
   ];
 
-  const grouped: Record<string, Issue[]> = { todo: [], in_progress: [], done: [] };
+  const grouped: Record<string, Issue[]> = { todo: [], in_progress: [], in_review: [], done: [] };
   for (const i of issues) {
     if (i.status in grouped) grouped[i.status].push(i);
   }
 
+  const [rejectDialog, setRejectDialog] = useState<RejectDialog | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const orchUrl = buildOrchUrl();
+
+  async function handleApprove(issue: Issue) {
+    setActionError(null);
+    try {
+      const res = await fetch(`${orchUrl}/issues/${issue.id}/transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done', actor: 'human' }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onRefresh();
+    } catch (e) {
+      setActionError(`Approve failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async function handleRejectSubmit() {
+    if (!rejectDialog) return;
+    const { issue, reason } = rejectDialog;
+    setRejectDialog((d) => d && { ...d, submitting: true });
+    setActionError(null);
+    try {
+      const transRes = await fetch(`${orchUrl}/issues/${issue.id}/transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'in_progress', actor: 'human' }),
+      });
+      if (!transRes.ok) throw new Error(`Transition HTTP ${transRes.status}`);
+
+      if (issue.assigned_to) {
+        const body = `@${issue.assigned_to} Rejected and reopened: ${reason.trim() || '(no reason given)'}`;
+        const commentRes = await fetch(`${orchUrl}/issues/${issue.id}/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ author: 'human', content: body }),
+        });
+        if (!commentRes.ok) throw new Error(`Comment HTTP ${commentRes.status}`);
+      }
+
+      setRejectDialog(null);
+      onRefresh();
+    } catch (e) {
+      setActionError(`Reject failed: ${e instanceof Error ? e.message : String(e)}`);
+      setRejectDialog((d) => d && { ...d, submitting: false });
+    }
+  }
+
   return (
-    <div className="border border-slate-300 dark:border-white/10 bg-white dark:bg-[#0a0a0a] p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-[9px] text-violet-600 dark:text-violet-400 tracking-[2px] font-mono">
-          {'// KANBAN'}
+    <>
+      <div className="border border-slate-300 dark:border-white/10 bg-white dark:bg-[#0a0a0a] p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-[9px] text-violet-600 dark:text-violet-400 tracking-[2px] font-mono">
+            {'// KANBAN'}
+          </div>
+          <div className="text-[9px] text-slate-400 dark:text-white/30 tracking-[1px] font-mono">
+            {issues.length} ISSUES
+          </div>
         </div>
-        <div className="text-[9px] text-slate-400 dark:text-white/30 tracking-[1px] font-mono">
-          {issues.length} ISSUES
-        </div>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {cols.map((c) => (
-          <div key={c.key} className="min-w-0">
-            <div className="text-[9px] text-slate-500 dark:text-white/40 tracking-[2px] font-mono mb-2 flex items-center justify-between">
-              <span>{c.label}</span>
-              <span className="text-slate-400 dark:text-white/30">{grouped[c.key].length}</span>
-            </div>
-            <ul className="space-y-2">
-              {grouped[c.key].length === 0 ? (
-                <li className="text-[10px] text-slate-400 dark:text-white/30 font-mono italic">
-                  —
-                </li>
-              ) : (
-                grouped[c.key].map((i) => {
-                  const dot = priorityDot(i.priority);
-                  return (
-                    <li
-                      key={i.id}
-                      className="border border-slate-200 dark:border-white/5 bg-slate-50/50 dark:bg-white/[0.02] px-3 py-2"
-                    >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot.color}`}
-                          title={dot.label}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div
-                            className="text-[12px] text-slate-800 dark:text-white/90 leading-snug"
-                            style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 400 }}
-                          >
-                            {i.title}
-                          </div>
-                          <div className="mt-1 flex items-center gap-2 flex-wrap">
-                            <span className="text-xs leading-none">
-                              {agentEmoji(i.assigned_to)}
-                            </span>
-                            {i.goal_id != null && (
-                              <span className="text-[9px] text-slate-400 dark:text-white/30 tracking-[1px] font-mono">
-                                G{i.goal_id}
+        {actionError && (
+          <div className="mb-3 text-[10px] text-red-600 dark:text-red-400 font-mono border border-red-300 dark:border-red-500/30 bg-red-50/50 dark:bg-red-500/[0.05] px-3 py-1.5">
+            {actionError}
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          {cols.map((c) => (
+            <div key={c.key} className="min-w-0">
+              <div className={`text-[9px] tracking-[2px] font-mono mb-2 flex items-center justify-between ${c.labelColor}`}>
+                <span>{c.label}</span>
+                <span className="text-slate-400 dark:text-white/30">{grouped[c.key].length}</span>
+              </div>
+              <ul className="space-y-2">
+                {grouped[c.key].length === 0 ? (
+                  <li className="text-[10px] text-slate-400 dark:text-white/30 font-mono italic">
+                    —
+                  </li>
+                ) : (
+                  grouped[c.key].map((i) => {
+                    const dot = priorityDot(i.priority);
+                    return (
+                      <li
+                        key={i.id}
+                        className={`border bg-slate-50/50 dark:bg-white/[0.02] px-3 py-2 ${
+                          c.key === 'in_review'
+                            ? 'border-violet-300 dark:border-violet-500/30'
+                            : 'border-slate-200 dark:border-white/5'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span
+                            className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot.color}`}
+                            title={dot.label}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div
+                              className="text-[12px] text-slate-800 dark:text-white/90 leading-snug"
+                              style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 400 }}
+                            >
+                              {i.title}
+                            </div>
+                            <div className="mt-1 flex items-center gap-2 flex-wrap">
+                              <span className="text-xs leading-none">
+                                {agentEmoji(i.assigned_to)}
                               </span>
+                              {i.goal_id != null && (
+                                <span className="text-[9px] text-slate-400 dark:text-white/30 tracking-[1px] font-mono">
+                                  G{i.goal_id}
+                                </span>
+                              )}
+                              <span className="text-[9px] text-slate-300 dark:text-white/20 tracking-[1px] font-mono">
+                                #{i.id}
+                              </span>
+                            </div>
+                            {c.key === 'in_review' && (
+                              <div className="mt-2 flex gap-1.5">
+                                <button
+                                  onClick={() => handleApprove(i)}
+                                  className="text-[9px] tracking-[1px] font-mono px-2 py-0.5 border border-emerald-400 dark:border-emerald-500/50 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-colors"
+                                >
+                                  [Approve]
+                                </button>
+                                <button
+                                  onClick={() => setRejectDialog({ issue: i, reason: '', submitting: false })}
+                                  className="text-[9px] tracking-[1px] font-mono px-2 py-0.5 border border-red-300 dark:border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                                >
+                                  [Reject and reopen]
+                                </button>
+                              </div>
                             )}
-                            <span className="text-[9px] text-slate-300 dark:text-white/20 tracking-[1px] font-mono">
-                              #{i.id}
-                            </span>
                           </div>
                         </div>
-                      </div>
-                    </li>
-                  );
-                })
-              )}
-            </ul>
-          </div>
-        ))}
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+
+      {/* Reject and reopen dialog */}
+      {rejectDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md border border-slate-300 dark:border-white/10 bg-white dark:bg-[#0f0f0f] p-6 shadow-xl">
+            <div className="text-[9px] text-violet-600 dark:text-violet-400 tracking-[2px] font-mono mb-3">
+              {'// REJECT AND REOPEN'}
+            </div>
+            <div className="text-[12px] text-slate-700 dark:text-white/70 mb-1" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+              Issue #{rejectDialog.issue.id}: {rejectDialog.issue.title}
+            </div>
+            {rejectDialog.issue.assigned_to && (
+              <div className="text-[10px] text-slate-400 dark:text-white/30 font-mono mb-4">
+                will notify @{rejectDialog.issue.assigned_to}
+              </div>
+            )}
+            <label className="block text-[9px] text-slate-500 dark:text-white/40 tracking-[1px] font-mono mb-1">
+              REASON
+            </label>
+            <textarea
+              className="w-full border border-slate-300 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] text-[12px] text-slate-800 dark:text-white/80 px-3 py-2 resize-none focus:outline-none focus:border-violet-400 dark:focus:border-violet-500/50 font-mono"
+              style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
+              rows={3}
+              placeholder="Describe what needs to be fixed…"
+              value={rejectDialog.reason}
+              onChange={(e) => setRejectDialog((d) => d && { ...d, reason: e.target.value })}
+              disabled={rejectDialog.submitting}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRejectSubmit();
+                if (e.key === 'Escape') setRejectDialog(null);
+              }}
+            />
+            <div className="mt-4 flex gap-2 justify-end">
+              <button
+                onClick={() => setRejectDialog(null)}
+                disabled={rejectDialog.submitting}
+                className="text-[9px] tracking-[1px] font-mono px-3 py-1 border border-slate-300 dark:border-white/10 text-slate-500 dark:text-white/40 hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectSubmit}
+                disabled={rejectDialog.submitting}
+                className="text-[9px] tracking-[1px] font-mono px-3 py-1 border border-red-400 dark:border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-40"
+              >
+                {rejectDialog.submitting ? 'Rejecting…' : '[Reject and reopen]'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -299,39 +442,51 @@ function InboxPanel({ items }: { items: InboxItem[] }) {
 
 export default function OrchPanels() {
   const [data, setData] = useState<DashboardPayload | null>(null);
+  const [inReviewIssues, setInReviewIssues] = useState<Issue[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [lastOk, setLastOk] = useState<number | null>(null);
   const aliveRef = useRef(true);
 
+  const orchUrl = buildOrchUrl();
+
+  const fetchOnce = useCallback(async () => {
+    try {
+      const [dashRes, inReviewRes] = await Promise.all([
+        fetch(`${orchUrl}/dashboard`, { cache: 'no-store' }),
+        fetch(`${orchUrl}/issues?status=in_review`, { cache: 'no-store' }),
+      ]);
+      if (!dashRes.ok) throw new Error(`HTTP ${dashRes.status}`);
+      const json = (await dashRes.json()) as DashboardPayload;
+      if (!aliveRef.current) return;
+      setData(json);
+      setError(null);
+      setLastOk(Date.now());
+      if (inReviewRes.ok) {
+        const inReviewJson = (await inReviewRes.json()) as { issues: Issue[] };
+        if (aliveRef.current) setInReviewIssues(inReviewJson.issues ?? []);
+      }
+    } catch (e) {
+      if (!aliveRef.current) return;
+      setError(e instanceof Error ? e.message : 'fetch failed');
+    }
+  }, [orchUrl]);
+
   useEffect(() => {
     aliveRef.current = true;
-    const url = `${buildOrchUrl()}/dashboard`;
-
-    const fetchOnce = async () => {
-      try {
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as DashboardPayload;
-        if (!aliveRef.current) return;
-        setData(json);
-        setError(null);
-        setLastOk(Date.now());
-      } catch (e) {
-        if (!aliveRef.current) return;
-        setError(e instanceof Error ? e.message : 'fetch failed');
-      }
-    };
-
     fetchOnce();
     const id = setInterval(fetchOnce, 30_000);
     return () => {
       aliveRef.current = false;
       clearInterval(id);
     };
-  }, []);
+  }, [fetchOnce]);
 
   const goals = data?.goals?.items ?? [];
-  const issues = data?.issues?.recent ?? [];
+  // Merge dashboard recent issues with in_review issues, de-duplicating by id.
+  // in_review issues are fetched separately because the dashboard slice(10) may omit them.
+  const dashIssues = data?.issues?.recent ?? [];
+  const inReviewIds = new Set(inReviewIssues.map((i) => i.id));
+  const issues = [...inReviewIssues, ...dashIssues.filter((i) => !inReviewIds.has(i.id))];
   const inbox = data?.inbox?.items ?? [];
 
   // Live indicator: green if last successful fetch < 75s ago, red otherwise.
@@ -381,7 +536,7 @@ export default function OrchPanels() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="lg:col-span-2">
-            <KanbanPanel issues={issues} />
+            <KanbanPanel issues={issues} onRefresh={fetchOnce} />
           </div>
           <CampaignPanel goals={goals} />
           <InboxPanel items={inbox} />

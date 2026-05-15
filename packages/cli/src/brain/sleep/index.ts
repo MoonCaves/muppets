@@ -27,7 +27,7 @@ import { runProfileStep, ProfileResult } from './steps/profile.js';
 import { runReasoningStep, ReasoningResult } from './steps/reasoning.js';
 import { saveCheckpoint } from './utils/checkpoint.js';
 import { getTimelineDb } from '../timeline.js';
-import { makeWrappedDecayStep } from './fork-extensions/integration.js';
+// import { makeWrappedDecayStep } from './fork-extensions/integration.js'; // GAP-REVIVAL: disabled 2026-05-12, formula preserved in fork-extensions/
 
 // GAP-REVIVAL EXTENSION POINT — last verified 2026-05-09 against v1.9.5
 //
@@ -53,7 +53,7 @@ import { makeWrappedDecayStep } from './fork-extensions/integration.js';
 //   No explicit boot call needed in this file.
 // SEE ALSO: ./fork-extensions/REATTACHMENT.md — full reattachment checklist
 //   for verifying this extension still works against new upstream releases.
-const runDecayStep = makeWrappedDecayStep(upstreamRunDecayStep, getTimelineDb);
+const runDecayStep = upstreamRunDecayStep; // GAP-REVIVAL: disabled 2026-05-12. To re-enable: restore import above + this line.
 
 const logger = createLogger('sleep-agent');
 

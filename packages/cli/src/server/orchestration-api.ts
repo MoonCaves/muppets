@@ -521,23 +521,14 @@ export function createOrchestrationRouter(
   }));
 
   router.get('/inbox/:id', (req, res) => {
-    // When includeArtifacts=true, return the joined shape with deliverables.
     if (req.query.includeArtifacts === 'true') {
       const item = getInboxItemWithArtifacts(Number(param(req, 'id')));
       if (!item) return res.status(404).json({ error: 'Inbox item not found' });
-      // Auto-acknowledge on view (per user spec — inbox items are FYI).
-      // Idempotent: only flips pending → acknowledged, leaves resolved alone.
-      if (item.status === 'pending') {
-        try { acknowledgeInboxItem(item.id); } catch { /* ignore */ }
-      }
       res.json({ item });
       return;
     }
     const item = getInboxItem(Number(param(req, 'id')));
     if (!item) return res.status(404).json({ error: 'Inbox item not found' });
-    if (item.status === 'pending') {
-      try { acknowledgeInboxItem(item.id); } catch { /* ignore */ }
-    }
     res.json({ item });
   });
 
