@@ -580,7 +580,10 @@ export async function deleteBySourcePaths(
 ): Promise<void> {
   if (sourcePaths.length === 0) return;
   if (!chromaInitialized) await initializeEmbeddings(root);
-  if (!chromaAvailable) return;
+  if (!chromaAvailable) {
+    logger.warn("ChromaDB unavailable — orphan cleanup skipped", { count: sourcePaths.length });
+    return;
+  }
 
   const col = collections.get(root) ?? collections.get('__default__');
   if (!col) return;

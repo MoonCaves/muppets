@@ -322,7 +322,7 @@ async function syncCycle(root: string): Promise<{ ingested: number; deleted: num
     if (!watchedPaths.has(path)) {
       // Clean up all files from this folder
       for (const [relPath, entry] of Object.entries(state[path])) {
-        try { await cleanupFile(root, entry.source_path, relPath); } catch {}
+        try { await cleanupFile(root, entry.source_path, relPath, path); } catch {}
       }
       delete state[path];
     }
