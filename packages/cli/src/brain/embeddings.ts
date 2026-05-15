@@ -564,3 +564,35 @@ export async function getIndexStats(root?: string): Promise<{
   const count = await collection.count();
   return { totalChunks: count, available: true };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DELETE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Delete all ChromaDB chunks whose source_path matches any of the given paths.
+ * Used by watched-folders cleanup to remove orphaned chunks when files are
+ * deleted or updated. Industry standard: delete on removal. Best-effort.
+ */
+export async function deleteBySourcePaths(
+  root: string,
+  sourcePaths: string[]
+): Promise<void> {
+  if (sourcePaths.length === 0) return;
+  if (!chromaInitialized) await initializeEmbeddings(root);
+  if (!chromaAvailable) return;
+
+  const col = collections.get(root) ?? collections.get('__default__');
+  if (!col) return;
+
+  try {
+    await col.delete({
+      where: sourcePaths.length === 1
+        ? { source_path: sourcePaths[0] }
+        : { source_path: { ['$in']: sourcePaths } } as unknown as Record<string, string>,
+    });
+    logger.debug('ChromaDB chunks deleted', { count: sourcePaths.length });
+  } catch (err) {
+    logger.warn('ChromaDB chunk deletion failed (non-fatal)', { error: String(err) });
+  }
+}

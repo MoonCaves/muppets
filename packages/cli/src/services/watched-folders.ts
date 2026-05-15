@@ -10,6 +10,7 @@ import { join, relative, extname, basename } from 'path';
 import { createLogger } from '../logger.js';
 import { getIdentityForRoot } from '../config.js'; // fleet-safe: threads root explicitly
 import { storeConversation } from '../brain/store-conversation.js';
+import { deleteBySourcePaths } from '../brain/embeddings.js';
 import { removeFromTimeline } from '../brain/timeline.js';
 import type { ServiceHandle } from '../types.js';
 
@@ -96,17 +97,18 @@ function buildSourcePath(folderLabel: string, folderPath: string, filePath: stri
  * The actual DB source_path is channel://watched-folder/{uuid}, not the file:// path.
  * We find matching records by looking up timeline entries with the filename in the title.
  */
-async function cleanupFile(root: string, sourcePath: string, relPath: string): Promise<void> {
-  const fileName = relPath.split('/').pop() || relPath;
+async function cleanupFile(root: string, sourcePath: string, relPath: string, folderPath?: string): Promise<void> {
+  // Use the full sourcePath for matching to avoid false positives from shared filenames
 
   // Find the actual channel:// source paths from timeline by matching title
   let channelSourcePaths: string[] = [];
   try {
     const { getTimelineDb } = await import('../brain/timeline.js');
     const tdb = await getTimelineDb(root);
+    const titleMatch = folderPath ? `%${folderPath}/${relPath}%` : `%${relPath}%`;
     const rows = tdb.prepare(
       `SELECT source_path FROM timeline_events WHERE source_path LIKE 'channel://watched-folder/%' AND title LIKE ?`
-    ).all(`%${fileName}%`) as Array<{ source_path: string }>;
+    ).all(titleMatch) as Array<{ source_path: string }>;
     channelSourcePaths = rows.map(r => r.source_path);
 
     // Delete timeline entries
@@ -119,7 +121,7 @@ async function cleanupFile(root: string, sourcePath: string, relPath: string): P
       tdb.prepare('DELETE FROM facts WHERE source_path LIKE ?').run(`%${sp}%`);
     }
 
-    logger.debug('Cleaned timeline + facts', { fileName, count: channelSourcePaths.length });
+    logger.debug('Cleaned timeline + facts', { relPath, count: channelSourcePaths.length });
   } catch (err) {
     logger.debug('Failed to remove timeline/facts', { sourcePath, error: String(err) });
   }
@@ -157,6 +159,11 @@ async function cleanupFile(root: string, sourcePath: string, relPath: string): P
     } catch (err) {
       logger.debug('Failed to remove entity mentions', { sourcePath, error: String(err) });
     }
+  }
+
+  // Delete orphaned ChromaDB chunks — industry standard: delete on removal
+  if (channelSourcePaths.length > 0) {
+    await deleteBySourcePaths(root, channelSourcePaths);
   }
 }
 
@@ -253,13 +260,13 @@ async function syncCycle(root: string): Promise<{ ingested: number; deleted: num
 
         // If this is an update, clean up old data first
         if (existing) {
-          await cleanupFile(root, existing.source_path, relPath);
+          await cleanupFile(root, existing.source_path, relPath, folder.path);
         }
 
         // Ingest
         const fileName = basename(filePath);
         await storeConversation(root, {
-          prompt: `File: ${relPath}`,
+          prompt: `File: ${folder.path}/${relPath}`,
           response: content,
           channel: 'watched-folder',
           timestamp: new Date(stats.mtimeMs).toISOString(),
@@ -297,7 +304,7 @@ async function syncCycle(root: string): Promise<{ ingested: number; deleted: num
       const fullPath = join(folder.path, relPath);
       if (!diskFileSet.has(fullPath)) {
         try {
-          await cleanupFile(root, folderState[relPath].source_path, relPath);
+          await cleanupFile(root, folderState[relPath].source_path, relPath, folder.path);
           delete folderState[relPath];
           deleted++;
           logger.info(`Cleaned up deleted file: ${relPath}`, { folder: label });
